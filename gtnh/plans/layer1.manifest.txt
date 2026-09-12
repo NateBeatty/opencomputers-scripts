@@ -19,8 +19,7 @@ gregtech:gt.blockstones,7,20132,gregtech:gt.blockstones,7
 malisisdoors:door_factory,3,1,malisisdoors:door_factory,3
 minecraft:crafting_table,0,1,minecraft:crafting_table,0
 minecraft:dark_oak_stairs,0,1,minecraft:dark_oak_stairs,7
-minecraft:dirt,0,3259,minecraft:dirt,0
-minecraft:grass,0,40713,minecraft:grass,0
+minecraft:dirt,0,43972,minecraft:dirt,0
 minecraft:leaves,2,164,minecraft:leaves,6
 minecraft:log,1,33,minecraft:log,1
 minecraft:oak_stairs,0,16,minecraft:oak_stairs,1
@@ -32,4 +31,4 @@ minecraft:tallgrass,1,13,minecraft:tallgrass,1
 minecraft:wooden_slab,5,8,minecraft:wooden_slab,13
 ProjRed|Exploration:projectred.exploration.stonewalls,0,48,ProjRed|Exploration:projectred.exploration.stonewalls,0
 Ztones:tile.iszmBlock,1,30861,Ztones:tile.iszmBlock,1
-# Total items: 32, total blocks: 135377
+# Total items: 31, total blocks: 135377

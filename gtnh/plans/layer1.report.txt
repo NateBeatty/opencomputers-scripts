@@ -1,6 +1,6 @@
 # OC Schematic Conversion Report
-# Generated: 2026-09-12T09:27:00.931Z
-# Input: layer1.schematic
+# Generated: 2026-09-12T11:39:55.644Z
+# Input: gtnh/schematics/layer1.schematic
 # Plan name: layer1
 # Dimensions: 271 x 9 x 271
 # Rotation: 0 degrees
@@ -9,7 +9,7 @@
 | Block | ID | Meta | Count | Action | Reason |
 |-------|-----|------|-------|--------|--------|
 | minecraft:air:0 | 0 | 0 | 525308 | air | builtin-air |
-| minecraft:grass:0 | 2 | 0 | 40713 | place | itempanel-exact |
+| minecraft:grass:0 | 2 | 0 | 40713 | place | --itemmap |
 | Ztones:tile.iszmBlock:1 | 2363 | 1 | 30861 | place | unverified |
 | chisel:glass:6 | 917 | 6 | 23987 | place | unverified |
 | gregtech:gt.blockstones:7 | 2144 | 7 | 20132 | place | itempanel-exact |
@@ -59,7 +59,7 @@
 - Air (cleared): 525308
 - Skipped: 284
 - Placed: 135377
-- Palette entries: 32
+- Palette entries: 31
 
 ## Estimates (one generator, no charger)
 - Cells the robot visits: 660969
