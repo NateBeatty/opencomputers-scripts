@@ -1,0 +1,35 @@
+# OC Plan Material Manifest
+# Format: item, damage, count, block, meta
+appliedenergistics2:tile.BlockDrive,0,84,appliedenergistics2:tile.BlockDrive,0
+ArchitectureCraft:sawbench,1,1,ArchitectureCraft:sawbench,1
+ArchitectureCraft:shape,0,47,ArchitectureCraft:shape,0
+BiblioCraft:BiblioLamp,0,2,BiblioCraft:BiblioLamp,0
+BiblioCraft:BiblioPaneler,0,1,BiblioCraft:BiblioPaneler,0
+BiblioCraft:BiblioSeats,0,2,BiblioCraft:BiblioSeats,0
+BiblioCraft:BiblioTable,0,5,BiblioCraft:BiblioTable,0
+Botania:storage,3,2,Botania:storage,3
+chisel:diorite,1,8770,chisel:diorite,1
+chisel:glass,6,23987,chisel:glass,6
+chisel:laboratoryblock,7,5173,chisel:laboratoryblock,7
+etfuturum:bark,1,3,etfuturum:bark,1
+etfuturum:bark,9,5,etfuturum:bark,9
+etfuturum:bark,5,5,etfuturum:bark,5
+Forestry:factory2,2,1,Forestry:factory2,2
+gregtech:gt.blockstones,7,20132,gregtech:gt.blockstones,7
+malisisdoors:door_factory,3,1,malisisdoors:door_factory,3
+minecraft:crafting_table,0,1,minecraft:crafting_table,0
+minecraft:dark_oak_stairs,0,1,minecraft:dark_oak_stairs,7
+minecraft:dirt,0,3259,minecraft:dirt,0
+minecraft:grass,0,40713,minecraft:grass,0
+minecraft:leaves,2,164,minecraft:leaves,6
+minecraft:log,1,33,minecraft:log,1
+minecraft:oak_stairs,0,16,minecraft:oak_stairs,1
+minecraft:sand,0,1153,minecraft:sand,0
+minecraft:stained_hardened_clay,1,19,minecraft:stained_hardened_clay,1
+minecraft:stone,0,40,minecraft:stone,0
+minecraft:stone_slab,0,827,minecraft:stone_slab,8
+minecraft:tallgrass,1,13,minecraft:tallgrass,1
+minecraft:wooden_slab,5,8,minecraft:wooden_slab,13
+ProjRed|Exploration:projectred.exploration.stonewalls,0,48,ProjRed|Exploration:projectred.exploration.stonewalls,0
+Ztones:tile.iszmBlock,1,30861,Ztones:tile.iszmBlock,1
+# Total items: 32, total blocks: 135377

@@ -1,0 +1,4 @@
+# Plans are binary: keep git from applying CRLF conversion, which would corrupt
+# them (getplan would then reject the download as a CRC failure).
+*.plan binary
+*.schematic binary

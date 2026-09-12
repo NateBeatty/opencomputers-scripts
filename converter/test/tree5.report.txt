@@ -1,0 +1,39 @@
+# OC Schematic Conversion Report
+# Generated: 2026-09-11T12:44:52.989Z
+# Input: test/tree5.schematic
+# Plan name: tree5
+# Dimensions: 22 x 29 x 23
+# Rotation: 0 degrees
+
+## Block summary
+| Block | ID | Meta | Count | Action | Reason |
+|-------|-----|------|-------|--------|--------|
+| id0:0 | 0 | 0 | 13008 | air | air |
+| id18:2 | 18 | 2 | 1475 | skip | unmapped |
+| log:1 | 17 | 1 | 69 | place | fallback-default |
+| id126:13 | 126 | 13 | 48 | skip | unmapped |
+| id126:5 | 126 | 5 | 42 | skip | unmapped |
+| id18:6 | 18 | 6 | 22 | skip | unmapped |
+| id164:7 | 164 | 7 | 3 | skip | unmapped |
+| id164:6 | 164 | 6 | 3 | skip | unmapped |
+| id164:5 | 164 | 5 | 2 | skip | unmapped |
+| id125:5 | 125 | 5 | 1 | skip | unmapped |
+| id164:4 | 164 | 4 | 1 | skip | unmapped |
+
+## Totals
+- Total cells: 14674
+- Air (cleared): 13008
+- Skipped: 1597
+- Placed: 69
+- Palette entries: 1
+
+## Skipped blocks (not placeable)
+- id18:2 (1475x) — unmapped
+- id126:13 (48x) — unmapped
+- id126:5 (42x) — unmapped
+- id18:6 (22x) — unmapped
+- id164:7 (3x) — unmapped
+- id164:6 (3x) — unmapped
+- id164:5 (2x) — unmapped
+- id125:5 (1x) — unmapped
+- id164:4 (1x) — unmapped

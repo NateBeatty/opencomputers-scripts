@@ -1,0 +1,5 @@
+# OC Plan Material Manifest
+# Format: item, damage, count, block, meta
+leaves,0,1497,leaves,5
+log,1,69,log,1
+# Total items: 2, total blocks: 1566
