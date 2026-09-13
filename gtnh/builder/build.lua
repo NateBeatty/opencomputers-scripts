@@ -494,11 +494,22 @@ local function suckItem(key, wanted)
     if got >= wanted then break end
     local stack = ic.getStackInSlot(sides.down, slot)
     if stackKey(stack) == key then
-      local target = findSlot(key) or findEmptySlot()
+      -- This only runs while the chest is placed, and breaking the chest needs
+      -- a free slot to put it back into. So always leave one empty slot: top
+      -- up a matching stack that has room, and only start a new stack in an
+      -- empty slot if another empty slot remains afterwards.
+      local target = findSlot(key)
+      if target and robot.space(target) == 0 then target = nil end
+      if not target then
+        if freeSlotCount() < 2 then break end
+        target = findEmptySlot()
+      end
       if not target then break end
       robot.select(target)
       local before = robot.count(target)
-      ic.suckFromSlot(sides.down, slot, wanted - got)
+      -- Ask for no more than fits in this one slot, so nothing spills over
+      -- into the slot being kept free for the chest.
+      ic.suckFromSlot(sides.down, slot, math.min(wanted - got, robot.space(target)))
       got = got + (robot.count(target) - before)
     end
   end
