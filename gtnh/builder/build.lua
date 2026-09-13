@@ -1,11 +1,17 @@
 -- build.lua — The OpenComputers builder for GTNH 1.7.10.
 --
--- Builds a .plan layer by layer. For layer y the robot travels at height y+1
--- and works the cell directly below it, so every footprint cell is excavated
--- once as a travel cell and filled once as a build cell.
+-- Runs in two stages, each saved so a restart resumes where it stopped:
+--   1. Excavate: dig the whole box empty, top layer down to layer 0.
+--   2. Build: fill it layer by layer. For layer y the robot travels at height
+--      y+1 and works the cell directly below it.
 --
--- Usage: build <plan> [--resume | --restart] [--dry-run] [--yes]
---                     [--resync <x> <y> <z> <facing>]
+-- Usage: build <plan> [--excavate-only | --skip-excavate] [--restart]
+--                     [--dry-run] [--yes] [--resync <x> <y> <z> <facing>]
+--
+--   --excavate-only  dig the box, park in the starting cell, and stop, so the
+--                    site can be inspected. Run `build <plan>` afterwards to
+--                    build without digging again.
+--   --skip-excavate  the site is already clear: go straight to building.
 --
 -- Setup (AGENT_PROMPT.md section 3): the robot starts standing IN schematic
 -- cell (0,0,0) facing the direction that becomes +X. forward = +X, right = +Z,
@@ -41,13 +47,16 @@ local config = {
   restockRetrySeconds = 60,  -- how often to re-check the chest while waiting
   stacksPerRestock = 4,      -- stacks of the needed item to pull per trip
   minFreeSlots = 2,          -- void junk when fewer free slots than this
+  voidCheckInterval = 16,    -- while excavating, check for junk every N cells
 
   chestPattern = "ender",    -- substring identifying the ender chest item
   broadcastPort = 65656,
   broadcastInterval = 10,    -- seconds
   controlAddress = nil,      -- only this modem address may send commands
 
-  moveRetries = 16,          -- attempts before giving up on a blocked move
+  -- Attempts before giving up on a blocked move. Generous, because a column of
+  -- sand or gravel refills the cell ahead once per block while it is dug out.
+  moveRetries = 64,
 }
 
 do -- optional /etc/builder.cfg overrides
@@ -69,7 +78,9 @@ local state = {
   layer = 0, cellIndex = 0,
   pos = { x = 0, y = 0, z = 0 },
   facing = 0,                -- 0=+X, 1=+Z, 2=-X, 3=-Z
-  phase = "idle",
+  phase = "idle",             -- what the robot is doing right now (display only)
+  stage = nil,                -- "excavate" | "excavated" | "build" | "done"
+  exPass = 0, exIndex = 0,    -- excavation progress: pass (0 = top layer), cell
   deferred = {},             -- cells to retry at the end of the layer
   stock = {},                -- "name@damage" -> true, snapshotted at start
   chestPlaced = false,
@@ -335,7 +346,7 @@ local function broadcast(force)
     plan = state.planName, version = state.planVersion,
     layer = state.layer, layers = state.totalLayers,
     cell = state.cellIndex, cells = state.cellsPerLayer,
-    phase = state.phase,
+    phase = state.phase, stage = state.stage, exPass = state.exPass,
     energy = math.floor(energyFraction() * 100),
     fuel = fuelCount(),
     placed = state.counters.placed,
@@ -364,6 +375,7 @@ local function checkCommands()
        (config.controlAddress == nil or from == config.controlAddress) then
       local command = tostring(message)
       if command == "pause" then
+        local resumePhase = state.phase
         setPhase("paused")
         log("[CMD] Paused. Send 'resume' to continue.")
         while true do
@@ -371,7 +383,7 @@ local function checkCommands()
           if f2 and p2 == config.broadcastPort and
              (config.controlAddress == nil or f2 == config.controlAddress) then
             if tostring(m2) == "resume" then
-              setPhase("building")
+              setPhase(resumePhase)
               log("[CMD] Resumed.")
               break
             elseif tostring(m2) == "stop" then
@@ -488,6 +500,7 @@ end
 --- Never drop toward an inventory: drop() inserts into one if it is there.
 local function voidJunk()
   if freeSlotCount() >= config.minFreeSlots then return end
+  local prevPhase = state.phase
   setPhase("voiding")
   robot.turnAround()
   for slot = 1, robot.inventorySize() do
@@ -504,7 +517,7 @@ local function voidJunk()
     end
   end
   robot.turnAround()
-  setPhase("building")
+  setPhase(prevPhase)
 end
 
 -- ---------------------------------------------------------------------------
@@ -515,6 +528,7 @@ local restockFuelFromChest  -- forward declaration
 
 local function restIfNeeded()
   if energyFraction() >= config.restBelow then return end
+  local prevPhase = state.phase
   setPhase("resting")
   log(string.format("[REST] Energy %d%%, resting.", math.floor(energyFraction() * 100)))
   while energyFraction() < config.resumeAbove do
@@ -535,7 +549,7 @@ local function restIfNeeded()
     broadcast()
     os.sleep(5)
   end
-  setPhase("building")
+  setPhase(prevPhase)
   log("[REST] Energy restored, resuming.")
 end
 
@@ -803,6 +817,91 @@ local function dryRun(handle)
   local seconds = cells * 1.2
   log(string.format("Estimated time: %.1f hours", seconds / 3600))
   log(string.format("Estimated fuel: ~%d coal", math.ceil(cells * 20 / 1280)))
+  local digCells = h.width * (h.height + 1) * h.length
+  log(string.format("Excavation first (unless --skip-excavate): ~%.1f hours, ~%d coal",
+    digCells * 0.45 / 3600, math.ceil(digCells * 17 / 1280)))
+end
+
+-- ---------------------------------------------------------------------------
+-- Excavation
+-- ---------------------------------------------------------------------------
+
+--- Dig the whole build box empty, from the build's top travel layer (H) down
+--- to layer 0.
+---
+--- Top-down is what makes falling sand and gravel safe without any waiting:
+--- whatever a dig releases falls onto a layer that has not been dug yet, so a
+--- later pass digs it. After the last pass the only place a stray block can
+--- be is layer 0, and the build's first pass checks every layer-0 cell anyway.
+---
+--- Layers H..1 are dug by travelling inside the layer. Layer 0 is dug from
+--- layer 1 looking down, so the ground beneath the build is never touched,
+--- including when the ender chest is placed below to fetch fuel.
+---
+--- Finishes with the robot parked in cell (0,0,0) facing +X: where the user
+--- placed it, and the pose a fresh build starts from.
+--- @return "done", "stopped", or nil on failure (state is saved either way)
+local function excavate(handle)
+  local h = handle.header
+  local W, H, L = h.width, h.height, h.length
+  local cells = W * L
+  setPhase("excavating")
+
+  for pass = state.exPass, H do
+    state.exPass = pass
+    local y = H - pass
+    local travelY = (y == 0) and 1 or y
+    log(string.format("[DIG] Layer %d (pass %d of %d)", y, pass + 1, H + 1))
+
+    for index = state.exIndex, cells - 1 do
+      state.exIndex = index
+      local x, z = cellPosition(pass, index, W, L)
+
+      if not gotoCell(x, travelY, z) then
+        setPhase("error", "blocked while excavating")
+        log(string.format("[FATAL] Could not reach (%d,%d,%d). State saved.", x, travelY, z))
+        saveState()
+        return nil
+      end
+
+      if y == 0 and robot.detectDown() and not clearBelow() then
+        logManual("could not dig", x, 0, z, "unbreakable block")
+      end
+
+      saveState()
+      broadcast()
+      restIfNeeded()
+      -- Not on the first cell after arriving: behind the robot must be a
+      -- cell it has already dug, since junk is dropped behind it.
+      if (index + 1) % config.voidCheckInterval == 0 then voidJunk() end
+      if checkCommands() == "stop" then
+        setPhase("stopped")
+        log("[CMD] Stopped by the control station. State saved.")
+        saveState()
+        return "stopped"
+      end
+      os.sleep(0)
+    end
+
+    state.exIndex = 0
+    saveState()
+  end
+
+  -- Park in the starting cell, facing +X.
+  if not (gotoCell(0, 1, 0) and stepDown()) then
+    setPhase("error", "could not return to the start cell")
+    log("[FATAL] Excavation finished, but the robot could not get back to (0,0,0).")
+    saveState()
+    return nil
+  end
+  turnTo(0)
+
+  state.stage = "excavated"
+  state.exPass, state.exIndex = 0, 0
+  setPhase("excavated")
+  saveState()
+  log("[DIG] Excavation complete. The robot is parked in its starting cell.")
+  return "done"
 end
 
 -- ---------------------------------------------------------------------------
@@ -819,6 +918,8 @@ local function parseArgs()
     elseif a == "--restart" then opts.restart = true
     elseif a == "--dry-run" then opts.dryRun = true
     elseif a == "--yes" then opts.yes = true
+    elseif a == "--excavate-only" then opts.excavateOnly = true
+    elseif a == "--skip-excavate" then opts.skipExcavate = true
     elseif a == "--resync" then
       opts.resync = {
         x = tonumber(args[i + 1]), y = tonumber(args[i + 2]),
@@ -863,7 +964,11 @@ end
 local function main()
   local planPath, opts = parseArgs()
   if not planPath then
-    log("Usage: build <plan> [--resume | --restart] [--dry-run] [--yes]")
+    log("Usage: build <plan> [--excavate-only | --skip-excavate] [--restart] [--dry-run] [--yes]")
+    return
+  end
+  if opts.excavateOnly and opts.skipExcavate then
+    log("[FATAL] --excavate-only and --skip-excavate cannot be used together.")
     return
   end
 
@@ -900,8 +1005,9 @@ local function main()
   if saved and saved.planName == handle.name and saved.planVersion == h.planVersion
      and saved.planCRC == h.crcStored then
     for k, v in pairs(saved) do state[k] = v end
-    log(string.format("[RESUME] Layer %d, cell %d, at (%d,%d,%d) facing %d",
-      state.layer, state.cellIndex, state.pos.x, state.pos.y, state.pos.z, state.facing))
+    state.stage = state.stage or "build"  -- saved before stages existed
+    log(string.format("[RESUME] Stage %s, at (%d,%d,%d) facing %d",
+      state.stage, state.pos.x, state.pos.y, state.pos.z, state.facing))
     if state.chestPlaced then
       log("[RESUME] The chest was left placed; recovering it.")
       recoverChest()
@@ -911,20 +1017,16 @@ local function main()
     plan.close(handle)
     return
   else
-    -- Fresh build: step up out of cell (0,0,0), then snapshot the stock.
-    log("[SETUP] Starting a fresh build.")
-    if not stepUp() then
-      log("[FATAL] Cannot move up out of the starting cell.")
-      plan.close(handle)
-      return
+    -- Fresh start: the robot stands in cell (0,0,0) facing +X.
+    if opts.skipExcavate then
+      log("[SETUP] Fresh start, skipping excavation.")
+      state.stage = "excavated"
+    else
+      log("[SETUP] Fresh start: excavating the box first.")
+      state.stage = "excavate"
     end
-    local okSnap, chestCounts, robotOnly = takeStockSnapshot()
-    if not okSnap then plan.close(handle) return end
-    if not stockReport(handle, chestCounts or {}, robotOnly or {}, opts.yes) then
-      log("Aborted.")
-      plan.close(handle)
-      return
-    end
+    state.exPass, state.exIndex = 0, 0
+    saveState()
   end
 
   if opts.resync then
@@ -934,6 +1036,51 @@ local function main()
   end
 
   if chunkloader then chunkloader.setActive(true) end
+
+  -- Stage 1: excavation.
+  if state.stage == "excavate" then
+    if excavate(handle) ~= "done" then plan.close(handle) return end
+  end
+
+  if opts.excavateOnly then
+    if state.stage == "excavated" then
+      log("[DONE] Excavation finished. Check the site, then build with:")
+      log("       build " .. planPath)
+    else
+      log("[DONE] This plan is already past excavation (stage: " .. tostring(state.stage) .. ").")
+    end
+    plan.close(handle)
+    return
+  end
+
+  if state.stage == "done" then
+    log("[DONE] This plan is already built. Use --restart to build it again.")
+    plan.close(handle)
+    return
+  end
+
+  -- Stage 2 setup: step up out of cell (0,0,0), then snapshot the stock.
+  if state.stage == "excavated" then
+    if not stepUp() then
+      log("[FATAL] Cannot move up out of the starting cell.")
+      plan.close(handle)
+      return
+    end
+    local okSnap, chestCounts, robotOnly = takeStockSnapshot()
+    if not okSnap then plan.close(handle) return end
+    if not stockReport(handle, chestCounts or {}, robotOnly or {}, opts.yes) then
+      -- Back into the starting cell, so running the command again starts cleanly.
+      stepDown()
+      saveState()
+      log("Aborted. Nothing was built; run the same command again when ready.")
+      plan.close(handle)
+      return
+    end
+    state.stage = "build"
+    state.layer, state.cellIndex = 0, 0
+    saveState()
+  end
+
   setPhase("building")
 
   for layer = state.layer, H - 1 do
@@ -991,6 +1138,7 @@ local function main()
     saveState()
   end
 
+  state.stage = "done"
   setPhase("done")
   log("[DONE] Build complete.")
   log(string.format("  placed %d, cleared %d, skipped %d",

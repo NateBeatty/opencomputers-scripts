@@ -121,15 +121,34 @@ robot's screen, and press the OpenComputers paste key.
   you can simply paste it again.
 
 ### 3. Start the Build
+
+The builder runs in two stages, and saves progress through both:
+
+1. **Excavate** — dig the whole box empty, from the top layer down to layer 0.
+   Digging top-down means sand or gravel released by a dig always lands on a
+   layer that still gets dug, so nothing ends up in finished work.
+2. **Build** — fill the box layer by layer from the bottom.
+
+To dig first, inspect the site, then build:
 ```
-build tree5.plan
+build /plans/tree5.plan --excavate-only
+build /plans/tree5.plan
 ```
+The first command digs the box and parks the robot back in its starting cell,
+facing the same way. The second sees that excavation is done and goes straight
+to the stock report and building. Leave the robot where it parked in between.
+
+To do both in one go, run `build /plans/tree5.plan` on its own.
 
 Options:
-- `--resume`: Resume from interruption (reads state file)
-- `--restart`: Discard state and start fresh
-- `--dry-run`: Show what would be built without building
-- `--yes`: Skip confirmation prompts
+- `--excavate-only`: Dig the box, park in the starting cell, and stop
+- `--skip-excavate`: The site is already clear; go straight to building
+- `--restart`: Discard saved progress and start fresh (the robot must be back in its starting cell)
+- `--dry-run`: Show what would be built, with time and fuel estimates, without moving
+- `--yes`: Skip the confirmation prompt after the stock report
+
+A restart after a crash or shutdown resumes automatically in whichever stage it
+was in; no flag is needed.
 
 ### 4. Monitoring
 While building, the robot broadcasts status every 10 seconds on port 65656:
