@@ -67,6 +67,22 @@ do -- optional /etc/builder.cfg overrides
       for k, v in pairs(user) do config[k] = v end
     end
   end
+
+  -- fuelItems must map item names to energy per item. An older config used a
+  -- plain list ({ "coal" }), which silently made nothing count as fuel.
+  local validFuel = type(config.fuelItems) == "table" and next(config.fuelItems) ~= nil
+  if validFuel then
+    for name, energy in pairs(config.fuelItems) do
+      if type(name) ~= "string" or type(energy) ~= "number" then
+        validFuel = false
+        break
+      end
+    end
+  end
+  if not validFuel then
+    print("[WARN] fuelItems in /etc/builder.cfg is in an old format; using minecraft:coal.")
+    config.fuelItems = { ["minecraft:coal"] = 1280 }
+  end
 end
 
 -- ---------------------------------------------------------------------------
@@ -531,23 +547,32 @@ local function restIfNeeded()
   local prevPhase = state.phase
   setPhase("resting")
   log(string.format("[REST] Energy %d%%, resting.", math.floor(energyFraction() * 100)))
+  local warnedNoFuel = false
   while energyFraction() < config.resumeAbove do
     feedGenerators()
+    local waitSeconds = 5
     if fuelCount() == 0 then
       restockFuelFromChest()
       if fuelCount() == 0 then
         setPhase("waiting-fuel", "out of fuel")
+        if not warnedNoFuel then
+          log("[WAIT] No fuel aboard or in the ender chest. Checking again every "
+            .. config.restockRetrySeconds .. " seconds.")
+          warnedNoFuel = true
+        end
         if energyFraction() < config.shutdownBelow then
           log("[FATAL] Out of fuel and nearly out of energy. Saving and shutting down.")
-          log("[FATAL] Put coal in the ender chest, turn the robot on, and run with --resume.")
+          log("[FATAL] Put coal in the ender chest, turn the robot on, and run the same command.")
           saveState()
           computer.shutdown()
           return
         end
+        -- Don't place and break the chest every few seconds while it's empty.
+        waitSeconds = config.restockRetrySeconds
       end
     end
     broadcast()
-    os.sleep(5)
+    os.sleep(waitSeconds)
   end
   setPhase(prevPhase)
   log("[REST] Energy restored, resuming.")
