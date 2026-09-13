@@ -229,16 +229,25 @@ local function energyFraction()
   return computer.energy() / max
 end
 
---- Feed each generator a single item, and only when the energy it releases
---- actually fits: queued fuel burns even when the buffer is full.
-local function feedGenerators()
-  local headroom = computer.maxEnergy() - computer.energy()
+--- Feed each empty generator a single fuel item.
+---
+--- Queued fuel burns even when the battery is full, so by default an item is
+--- only added when all of its energy fits. `allowOverflow` relaxes that while
+--- the robot is working or resting below the resume threshold: one generator
+--- makes 16/s and working drains ~40/s, so the battery can't actually fill up
+--- then, and a half-burned item simply keeps powering the work. Idle waits
+--- (materials, pauses) keep the strict check, since the battery can fill there.
+local function feedGenerators(allowOverflow)
+  local max = computer.maxEnergy()
+  local energy = computer.energy()
+  local headroom = max - energy
+  local overflowOk = allowOverflow and energy < max * config.resumeAbove
   for _, gen in ipairs(generators) do
     if (gen.count() or 0) == 0 then
       local slot, stack = findFuelSlot()
       if slot then
         local per = fuelEnergy(stack.name) or 1280
-        if headroom >= per then
+        if overflowOk or headroom >= per then
           robot.select(slot)
           gen.insert(1)
           headroom = headroom - per
@@ -549,7 +558,7 @@ local function restIfNeeded()
   log(string.format("[REST] Energy %d%%, resting.", math.floor(energyFraction() * 100)))
   local warnedNoFuel = false
   while energyFraction() < config.resumeAbove do
-    feedGenerators()
+    feedGenerators(true)
     local waitSeconds = 5
     if fuelCount() == 0 then
       restockFuelFromChest()
@@ -586,6 +595,37 @@ restockFuelFromChest = function()
   end
   topUpFuel()
   if not hadChest then recoverChest() end
+end
+
+local lastFuelFetchFailed = nil  -- computer.uptime() of the last empty-chest fetch
+
+--- Called on every cell while working, so the generators keep burning instead
+--- of sitting empty until the next rest. Fetches more fuel as soon as the robot
+--- runs out. Cheap: it only looks through the inventory when a generator is
+--- empty. MUST run before the cell below gets its block, because fetching fuel
+--- places the ender chest into that cell.
+local function keepGeneratorsFed()
+  local anyEmpty = false
+  for _, gen in ipairs(generators) do
+    if (gen.count() or 0) == 0 then anyEmpty = true break end
+  end
+  if not anyEmpty then return end
+
+  if not findFuelSlot() then
+    -- Don't place and break the chest on every cell while it's out of fuel;
+    -- restIfNeeded does the real waiting once the battery gets low.
+    local now = computer.uptime()
+    if lastFuelFetchFailed and now - lastFuelFetchFailed < config.restockRetrySeconds then
+      return
+    end
+    restockFuelFromChest()
+    if not findFuelSlot() then
+      lastFuelFetchFailed = now
+      return
+    end
+    lastFuelFetchFailed = nil
+  end
+  feedGenerators(true)
 end
 
 -- ---------------------------------------------------------------------------
@@ -842,9 +882,16 @@ local function dryRun(handle)
   local seconds = cells * 1.2
   log(string.format("Estimated time: %.1f hours", seconds / 3600))
   log(string.format("Estimated fuel: ~%d coal", math.ceil(cells * 20 / 1280)))
+  -- Each generator makes 16 energy/s; flying through the box costs ~40/s, so
+  -- with fewer than three generators the robot spends part of its time
+  -- stopped to recharge. Share of time spent working, generators kept fed:
+  local gens = math.max(1, #generators)
+  local workShare = math.min(1, (16 * gens - 0.5) / 39.5)
   local digCells = h.width * (h.height + 1) * h.length
-  log(string.format("Excavation first (unless --skip-excavate): ~%.1f hours, ~%d coal",
-    digCells * 0.45 / 3600, math.ceil(digCells * 17 / 1280)))
+  log(string.format("Excavation first (unless --skip-excavate): ~%.0f hours with %d generator(s)",
+    digCells * 0.45 / workShare / 3600, gens))
+  log(string.format("  fuel: ~%d coal, or ~%d coal blocks",
+    math.ceil(digCells * 17 / 1280), math.ceil(digCells * 17 / 12800)))
 end
 
 -- ---------------------------------------------------------------------------
@@ -896,6 +943,7 @@ local function excavate(handle)
       saveState()
       broadcast()
       restIfNeeded()
+      keepGeneratorsFed()
       -- Not on the first cell after arriving: behind the robot must be a
       -- cell it has already dug, since junk is dropped behind it.
       if (index + 1) % config.voidCheckInterval == 0 then voidJunk() end
@@ -1125,11 +1173,16 @@ local function main()
         return
       end
 
+      -- Energy and fuel BEFORE the cell below is filled: fetching fuel places
+      -- the ender chest into that cell, which would otherwise dig out the
+      -- block that was just placed there.
+      restIfNeeded()
+      keepGeneratorsFed()
+
       processCell(string.byte(layerData, index + 1), handle.palette, x, layer, z)
 
       saveState()
       broadcast()
-      restIfNeeded()
       if checkCommands() == "stop" then
         setPhase("stopped")
         log("[CMD] Stopped by the control station. State saved.")
