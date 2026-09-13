@@ -73,7 +73,9 @@ end
 print("")
 print("--- Energy ---")
 local energy, maxEnergy = computer.energy(), computer.maxEnergy()
-print(string.format("       %d / %d (%.0f%%)", energy, maxEnergy, energy / maxEnergy * 100))
+-- Energy values are floats; Lua 5.3's %d throws on a fractional number, so
+-- format them with %.0f instead.
+print(string.format("       %.0f / %.0f (%.0f%%)", energy, maxEnergy, energy / maxEnergy * 100))
 if energy > 0 then pass("Energy buffer") else fail("No energy") end
 
 if not ic then
