@@ -272,38 +272,47 @@ local function turnTo(dir)
   state.facing = dir
 end
 
---- Move one cell in the current facing, digging or waiting as needed.
-local function stepForward()
-  for _ = 1, config.moveRetries do
-    if robot.forward() then
-      state.pos.x = state.pos.x + DX[state.facing]
-      state.pos.z = state.pos.z + DZ[state.facing]
-      return true
+-- A move into a block fails only after OpenComputers makes the robot wait
+-- 0.4 s (the crit-star particles), while detect() costs one tick. So while the
+-- robot is digging through solid ground it checks before each move, and while
+-- the way has been clear it just moves.
+
+--- Build a one-cell step in one direction, digging or waiting as needed.
+local function makeStep(detect, swing, move, onMoved)
+  local digging = false  -- the last step in this direction had to dig
+  return function()
+    local dug = false
+    for _ = 1, config.moveRetries do
+      if digging and detect() then
+        swing()
+        dug = true
+      end
+      if move() then
+        digging = dug
+        onMoved()
+        return true
+      end
+      if detect() then
+        swing()          -- a block is in the way (gravel refills, so retry)
+        dug = true
+      else
+        os.sleep(0.5)    -- an entity is in the way; give it a moment
+      end
     end
-    if robot.detect() then
-      robot.swing()          -- a block is in the way (gravel refills, so retry)
-    else
-      os.sleep(0.5)          -- an entity is in the way; give it a moment
-    end
+    return false
   end
-  return false
 end
 
-local function stepUp()
-  for _ = 1, config.moveRetries do
-    if robot.up() then state.pos.y = state.pos.y + 1; return true end
-    if robot.detectUp() then robot.swingUp() else os.sleep(0.5) end
-  end
-  return false
-end
-
-local function stepDown()
-  for _ = 1, config.moveRetries do
-    if robot.down() then state.pos.y = state.pos.y - 1; return true end
-    if robot.detectDown() then robot.swingDown() else os.sleep(0.5) end
-  end
-  return false
-end
+local stepForward = makeStep(robot.detect, robot.swing, robot.forward, function()
+  state.pos.x = state.pos.x + DX[state.facing]
+  state.pos.z = state.pos.z + DZ[state.facing]
+end)
+local stepUp = makeStep(robot.detectUp, robot.swingUp, robot.up, function()
+  state.pos.y = state.pos.y + 1
+end)
+local stepDown = makeStep(robot.detectDown, robot.swingDown, robot.down, function()
+  state.pos.y = state.pos.y - 1
+end)
 
 --- Travel to a cell, digging through the travel layer as needed. Those cells
 --- get excavated on this pass anyway, so clearing them early is harmless.
