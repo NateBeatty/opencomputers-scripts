@@ -526,13 +526,16 @@ local function suckItem(key, wanted)
   return got
 end
 
+--- Fuel is matched by name only, like everywhere else, so charcoal
+--- (minecraft:coal with damage 1) is fetched as well as coal.
 local function topUpFuel()
   local have = fuelCount()
   if have >= config.fuelReserve then return end
-  for name in pairs(config.fuelItems) do
-    local pulled = suckItem(itemKey(name, 0), config.fuelReserve - have)
-    have = have + pulled
-    if have >= config.fuelReserve then return end
+  for key, info in pairs(scanChest()) do
+    if fuelEnergy(info.name) then
+      have = have + suckItem(key, config.fuelReserve - have)
+      if have >= config.fuelReserve then return end
+    end
   end
 end
 
@@ -845,8 +848,8 @@ local function stockReport(handle, chestCounts, robotOnly, assumeYes)
   end
 
   local haveFuel = false
-  for name in pairs(config.fuelItems) do
-    if state.stock[itemKey(name, 0)] then haveFuel = true end
+  for key in pairs(state.stock) do
+    if fuelEnergy(key:match("^(.*)@")) then haveFuel = true break end
   end
   if not haveFuel then
     log("")
