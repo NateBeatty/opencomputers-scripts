@@ -4,8 +4,9 @@
 --        fueltest --insert   also put one of each fuel type into the generator
 --                            and take it back out, to prove it really burns
 --
--- Fuel is matched by name only against fuelItems, read the same way the
--- builders read it: the defaults, then /etc/builder.cfg, then /etc/pbuild.cfg.
+-- Fuel is matched against fuelItems ("name@damage" first, then "name"), read
+-- the same way the builders read it: the defaults, then /etc/builder.cfg,
+-- then /etc/pbuild.cfg.
 
 local component = require("component")
 local robot = require("robot")
@@ -42,7 +43,7 @@ for slot = 1, robot.inventorySize() do
   local stack = ic.getStackInInternalSlot(slot)
   if stack then
     local key = stack.name .. "@" .. tostring(stack.damage or 0)
-    local isFuel = fuelItems[stack.name] ~= nil
+    local isFuel = (fuelItems[key] or fuelItems[stack.name]) ~= nil
     print(string.format("%2d  %-4s %-30s x%-3d %s", slot, isFuel and "FUEL" or "",
       key, stack.size, stack.label or ""))
 
