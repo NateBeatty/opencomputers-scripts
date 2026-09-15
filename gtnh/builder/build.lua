@@ -39,7 +39,7 @@ local config = {
   manualFile = "/home/manual.txt",
 
   fuelReserve = 16,          -- fuel items to keep aboard
-  fuelItems = { ["minecraft:coal"] = 1280 },  -- item name -> energy per item
+  fuelItems = { ["minecraft:coal"] = 1280 },  -- "name" or "name@damage" -> energy per item
   restBelow = 0.30,          -- rest when energy falls below this fraction
   resumeAbove = 0.90,        -- resume once energy is back above this fraction
   shutdownBelow = 0.05,      -- save and power off below this fraction
@@ -186,13 +186,18 @@ local function findChestSlot()
   return nil
 end
 
-local function fuelEnergy(name) return config.fuelItems[name] end
+--- Energy per item for a stack, or nil if it isn't fuel. An exact "name@damage"
+--- entry is needed for items like GregTech's gt.blockgem3, where one name
+--- covers several materials; a plain "name" entry matches every damage value.
+local function fuelEnergy(stack)
+  return config.fuelItems[stackKey(stack)] or config.fuelItems[stack.name]
+end
 
 local function findFuelSlot()
   for slot = 1, robot.inventorySize() do
     if robot.count(slot) > 0 then
       local stack = stackAt(slot)
-      if stack and fuelEnergy(stack.name) then return slot, stack end
+      if stack and fuelEnergy(stack) then return slot, stack end
     end
   end
   return nil
@@ -213,7 +218,7 @@ local function fuelCount()
   for slot = 1, robot.inventorySize() do
     if robot.count(slot) > 0 then
       local stack = stackAt(slot)
-      if stack and fuelEnergy(stack.name) then total = total + robot.count(slot) end
+      if stack and fuelEnergy(stack) then total = total + robot.count(slot) end
     end
   end
   return total
@@ -246,7 +251,7 @@ local function feedGenerators(allowOverflow)
     if (gen.count() or 0) == 0 then
       local slot, stack = findFuelSlot()
       if slot then
-        local per = fuelEnergy(stack.name) or 1280
+        local per = fuelEnergy(stack) or 1280
         if overflowOk or headroom >= per then
           robot.select(slot)
           gen.insert(1)
@@ -526,13 +531,13 @@ local function suckItem(key, wanted)
   return got
 end
 
---- Fuel is matched by name only, like everywhere else, so charcoal
---- (minecraft:coal with damage 1) is fetched as well as coal.
+--- Fetches every chest item fuelEnergy accepts, so charcoal (minecraft:coal
+--- with damage 1) is fetched as well as coal.
 local function topUpFuel()
   local have = fuelCount()
   if have >= config.fuelReserve then return end
   for key, info in pairs(scanChest()) do
-    if fuelEnergy(info.name) then
+    if fuelEnergy(info) then
       have = have + suckItem(key, config.fuelReserve - have)
       if have >= config.fuelReserve then return end
     end
@@ -556,7 +561,7 @@ local function voidJunk()
       local stack = stackAt(slot)
       local key = stackKey(stack)
       local keep = isChestStack(stack)
-        or (stack and fuelEnergy(stack.name) ~= nil)
+        or (stack and fuelEnergy(stack) ~= nil)
         or (key and state.stock[key])
       if not keep then
         robot.select(slot)
@@ -849,7 +854,11 @@ local function stockReport(handle, chestCounts, robotOnly, assumeYes)
 
   local haveFuel = false
   for key in pairs(state.stock) do
-    if fuelEnergy(key:match("^(.*)@")) then haveFuel = true break end
+    local name, damage = key:match("^(.*)@(%d+)$")
+    if name and fuelEnergy({ name = name, damage = tonumber(damage) }) then
+      haveFuel = true
+      break
+    end
   end
   if not haveFuel then
     log("")
