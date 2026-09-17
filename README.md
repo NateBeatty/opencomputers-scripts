@@ -8,6 +8,7 @@ This project provides:
 1. **Converter** (Node.js): Converts `.schematic` files to compact `.plan` files
 2. **Robot programs** (Lua): `build.lua` runs the build loop on your OC robot
 3. **Utilities**: `getplan.lua` (download), `recv.lua` (paste), `selftest.lua` (hardware check), `install.lua` (auto-update)
+4. **Parallel build** (`gtnh/parallel-build/`): several robots working one plan at once, coordinated by an admin computer. See [its README](gtnh/parallel-build/README.md).
 
 ## Requirements
 
