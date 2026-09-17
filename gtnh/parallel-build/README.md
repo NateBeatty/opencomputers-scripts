@@ -115,7 +115,7 @@ waits beside it and reports `blocked` instead of digging it out.
 | Robot | `/home/pbuild_state.txt` | The robot's own progress, saved every move |
 
 Fuel and restock settings come from `/etc/builder.cfg`, as for `build.lua`.
-`/etc/pbuild.cfg` can override anything, e.g. `return { port = 65657 }`.
+`/etc/pbuild.cfg` can override anything, e.g. `return { port = 5657 }` (ports go up to 65535).
 
 ## Tests
 

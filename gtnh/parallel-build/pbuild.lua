@@ -58,7 +58,7 @@ local config = {
   chestPattern = "ender",    -- substring identifying the ender chest item
   moveRetries = 64,          -- attempts before giving up on a block
 
-  port = 65657,
+  port = 5657,               -- 1..65535; the admin must use the same one
   requestTimeout = 4,        -- seconds to wait for the admin before resending
   contactWarnAfter = 60,     -- seconds without an answer before saying so
   statusInterval = 10,       -- seconds between status messages

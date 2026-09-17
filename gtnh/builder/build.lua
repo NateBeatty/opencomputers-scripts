@@ -50,7 +50,7 @@ local config = {
   voidCheckInterval = 16,    -- while excavating, check for junk every N cells
 
   chestPattern = "ender",    -- substring identifying the ender chest item
-  broadcastPort = 65656,
+  broadcastPort = 5656,      -- 1..65535
   broadcastInterval = 10,    -- seconds
   controlAddress = nil,      -- only this modem address may send commands
 

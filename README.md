@@ -152,7 +152,7 @@ A restart after a crash or shutdown resumes automatically in whichever stage it
 was in; no flag is needed.
 
 ### 4. Monitoring
-While building, the robot broadcasts status every 10 seconds on port 65656:
+While building, the robot broadcasts status every 10 seconds on port 5656:
 - Plan name and version
 - Current layer and cell
 - Progress percentage

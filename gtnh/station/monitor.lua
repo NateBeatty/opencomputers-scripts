@@ -15,7 +15,7 @@ local keyboard = require("keyboard")
 local term = require("term")
 
 local args = {...}
-local port = tonumber(args[1]) or 65656
+local port = tonumber(args[1]) or 5656
 
 if not component.isAvailable("modem") then
   print("[ERROR] No network card in this computer.")

@@ -39,7 +39,7 @@ local logic = require("pblogic")
 local args = {...}
 
 local config = {
-  port = 65657,
+  port = 5657,         -- 1..65535; the robots must use the same one
   stateFile = "/home/pbuild_admin.txt",
   manualFile = "/home/pbuild_manual.txt",
   stockFile = "/home/pbuild_stock.txt",
