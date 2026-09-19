@@ -60,6 +60,20 @@ function logic.grid(s)
   return tiles.grid(s.plan.width, s.plan.height, s.plan.length, s.tileSize)
 end
 
+--- Start the build round over on a site that is already dug (pbadmin
+--- --rebuild): every tile free at layer 0, and the chest checked again.
+--- Robots that come back with a saved tile are told to drop it.
+function logic.restartBuild(s)
+  s.round = "build"
+  s.holdBuild = false
+  for _, t in pairs(s.tiles) do
+    t.status, t.owner, t.p, t.i = "free", nil, 0, 0
+  end
+  for id = 0, logic.grid(s).count - 1 do s.lane[id] = true end
+  for _, r in pairs(s.robots) do r.tile = nil end
+  s.stock, s.stockBy = nil, nil
+end
+
 -- ---------------------------------------------------------------------------
 -- Helpers
 -- ---------------------------------------------------------------------------

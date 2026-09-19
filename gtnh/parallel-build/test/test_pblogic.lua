@@ -248,4 +248,39 @@ test("a released stock checker hands the job to the next robot", function()
   assert_eq(gb.type, "assign"); assert_eq(gb.needStock, true)
 end)
 
+test("--rebuild starts the build round over and robots drop their old tiles", function()
+  local s = newState()
+  local a = robotClient(s, "a")
+  a.hello()
+  s.round = "build"
+  s.stock = { ["minecraft:dirt@0"] = true }
+  for id = 0, 8 do s.tiles[id].status = "done"; s.lane[id] = true end
+  s.tiles[4].status = "free"
+  a.claim(4, { x = 20, y = 5, z = 20 })
+  a.send({ type = "progress", tile = 4, round = "build", p = 3, i = 32 })
+
+  logic.restartBuild(s)
+  assert_eq(s.round, "build")
+  assert_eq(s.stock, nil, "the chest is checked again")
+  for id = 0, 8 do
+    assert_eq(s.tiles[id].status, "free", "tile " .. id)
+    assert_eq(s.tiles[id].p, 0, "tile " .. id .. " layer")
+  end
+
+  assert_eq(a.hello({ tile = 4, round = "build" }).action, "released", "old tile dropped")
+  local got = a.claim(4, { x = 20, y = 5, z = 20 })
+  assert_eq(got.type, "assign"); assert_eq(got.round, "build")
+  assert_eq(got.p, 0); assert_eq(got.i, 0)
+  assert_eq(got.needStock, true)
+end)
+
+test("--rebuild on a fresh state skips the dig round", function()
+  local s = newState()
+  logic.restartBuild(s)
+  local a = robotClient(s, "a")
+  a.hello()
+  local got = a.claim(tiles.COLUMN)
+  assert_eq(got.type, "assign"); assert_eq(got.round, "build")
+end)
+
 print(string.format("\n=== %d passed, %d failed ===", passed, failed))

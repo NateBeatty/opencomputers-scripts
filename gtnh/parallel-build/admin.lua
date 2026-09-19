@@ -1,5 +1,5 @@
 -- admin.lua — The coordinator for the parallel builder. Installed as pbadmin.
--- Usage: pbadmin <plan> [--tile <size>] [--new] [--excavate-only]
+-- Usage: pbadmin <plan> [--tile <size>] [--new] [--excavate-only] [--rebuild]
 --
 -- Runs on a computer with a wireless network card, placed above the middle of
 -- the build site. It cuts the plan into tiles (16x16 by default), hands tiles
@@ -10,6 +10,10 @@
 --   --new          discard the saved admin state and start the plan over
 --   --excavate-only  stop the robots once every tile is dug, so the site can
 --                  be checked. Restart without it to start building.
+--   --rebuild      the site is already dug: start the build round over from
+--                  layer 0, keeping nothing of the old build progress. Works
+--                  with a changed plan too (those robots need --new and the
+--                  start pad). Only needed once; later restarts carry on.
 --
 -- Type a command and press Enter:
 --   release <id>      free robot <id>'s tile. Only once that robot is stopped
@@ -98,7 +102,7 @@ end
 -- Setup
 -- ---------------------------------------------------------------------------
 
-local planPath, tileSize, fresh, excavateOnly = nil, 16, false, false
+local planPath, tileSize, fresh, excavateOnly, rebuild = nil, 16, false, false, false
 do
   local i = 1
   while i <= #args do
@@ -110,6 +114,8 @@ do
       fresh = true
     elseif a == "--excavate-only" then
       excavateOnly = true
+    elseif a == "--rebuild" then
+      rebuild = true
     elseif a:sub(1, 2) == "--" then
       print("[FATAL] Unknown option " .. a)
       return
@@ -121,7 +127,11 @@ do
 end
 
 if not planPath or not tileSize or tileSize < 1 then
-  print("Usage: pbadmin <plan> [--tile <size>] [--new] [--excavate-only]")
+  print("Usage: pbadmin <plan> [--tile <size>] [--new] [--excavate-only] [--rebuild]")
+  return
+end
+if rebuild and (fresh or excavateOnly) then
+  print("[FATAL] --rebuild skips digging; it cannot go with --new or --excavate-only.")
   return
 end
 
@@ -161,6 +171,8 @@ if not fresh then
         print(string.format("[NOTE] Keeping the saved tile size %d; use --new to change it.",
           state.tileSize))
       end
+    elseif rebuild then
+      print("[NOTE] The saved admin state is for another plan; building this one on the dug site.")
     else
       print("[FATAL] The saved admin state is for " .. tostring(saved.plan.name) ..
         " version " .. tostring(saved.plan.version) .. ".")
@@ -171,6 +183,10 @@ if not fresh then
 end
 if not state then
   state = logic.newState(info, tileSize)
+end
+if rebuild then
+  logic.restartBuild(state)
+  print("[REBUILD] The build round starts over from layer 0; digging is skipped.")
 end
 -- Applies to this run only: restart without the flag to go on to building.
 state.holdBuild = excavateOnly
