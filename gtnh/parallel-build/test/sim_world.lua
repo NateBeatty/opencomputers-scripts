@@ -70,7 +70,9 @@ local serialization = { serialize = serialize, unserialize = unserialize }
 -- Plan
 -- ---------------------------------------------------------------------------
 
-local W, H, L, TILE = 20, 3, 20, 8
+-- H = 5 exercises every pass shape: the travel layer alone, a full
+-- three-layer pass, and a two-layer pass at the bottom.
+local W, H, L, TILE = 20, 5, 20, 8
 
 local PALETTE = {
   { flags = 0, itemName = "minecraft:dirt", damage = 0, blockName = "minecraft:dirt", meta = 0 },
@@ -118,11 +120,14 @@ local DROPS = {
   ["enderchest"] = "enderstorage:enderChest",
 }
 
+local GRAVITY = { ["minecraft:sand"] = true, ["minecraft:gravel"] = true }
+
 local function newWorld(tileSize)
   local world = {
     now = 0, blocks = {}, robots = {}, list = {}, violations = {},
     chest = {}, adminLog = {}, manual = 0, hooks = {},
     robotsMet = 0,   -- times a robot found another robot in its way
+    fell = 0,        -- blocks of sand or gravel that fell
   }
   world.s = logic.newState({ name = "sim", version = 1, crc = 42, width = W, height = H, length = L },
     tileSize or TILE)
@@ -131,9 +136,19 @@ local function newWorld(tileSize)
 
   for x = 0, W - 1 do
     for z = 0, L - 1 do
-      for y = 0, H - 1 do world.blocks[key(x, y, z)] = "minecraft:stone" end
+      for y = 0, H - 1 do
+        local b = "minecraft:stone"
+        if (x * 7 + z * 3 + y * 5) % 11 == 0 then b = "minecraft:sand"
+        elseif (x * 5 + z * 11 + y * 3) % 13 == 0 then b = "minecraft:gravel" end
+        world.blocks[key(x, y, z)] = b
+      end
     end
   end
+  -- Sand and gravel standing on the box, above the travel layer: they fall in
+  -- when the travel layer under them is dug.
+  for y = H + 1, H + 3 do world.blocks[key(5, y, 5)] = "minecraft:sand" end
+  world.blocks[key(13, H + 1, 3)] = "minecraft:gravel"
+  world.blocks[key(13, H + 2, 3)] = "minecraft:gravel"
   -- Things in the travel layer and the column, which robots must clear.
   world.blocks[key(3, H, 2)] = "minecraft:log"
   world.blocks[key(12, H, 12)] = "minecraft:log"
@@ -156,6 +171,26 @@ end
 local function blockAt(world, x, y, z)
   if y < 0 then return "ground" end
   return world.blocks[key(x, y, z)]
+end
+
+local function emptyCell(world, x, y, z)
+  return y >= 0 and world.blocks[key(x, y, z)] == nil and world.robots[key(x, y, z)] == nil
+end
+
+--- Cell (x, y, z) just became empty: sand or gravel above it falls straight
+--- down onto the next block or robot, like Minecraft (instantly here, which
+--- only makes refills come sooner).
+local function settle(world, x, y, z)
+  while true do
+    local b = world.blocks[key(x, y + 1, z)]
+    if not (b and GRAVITY[b]) or not emptyCell(world, x, y, z) then return end
+    local land = y
+    while emptyCell(world, x, land - 1, z) do land = land - 1 end
+    world.blocks[key(x, y + 1, z)] = nil
+    world.blocks[key(x, land, z)] = b
+    world.fell = world.fell + 1
+    y = y + 1
+  end
 end
 
 local function violation(world, text)
@@ -230,7 +265,7 @@ local function addItem(r, name, count)
   end
 end
 
-local function newRobot(world, name)
+local function newRobot(world, name, source)
   local r = {
     name = name, address = "addr-" .. name, pos = { x = -1, y = 0, z = 0 }, facing = 0,
     inv = {}, selected = 1, inbox = {}, logs = {}, fs = {}, wake = world.now,
@@ -278,6 +313,7 @@ local function newRobot(world, name)
     checkOwnTile(world, r, x, y, z, "dug")
     world.blocks[key(x, y, z)] = nil
     addItem(r, DROPS[b] or b, 1)
+    settle(world, x, y, z)
     sleep(0.4)
     return true, "block"
   end
@@ -285,10 +321,12 @@ local function newRobot(world, name)
   local function move(side)
     local x, y, z = cellFor(side)
     if occupied(x, y, z) then sleep(0.4) return nil, "solid" end
-    world.robots[key(r.pos.x, r.pos.y, r.pos.z)] = nil
+    local from = r.pos
+    world.robots[key(from.x, from.y, from.z)] = nil
     r.pos = { x = x, y = y, z = z }
     world.robots[key(x, y, z)] = r
     r.moves = r.moves + 1
+    settle(world, from.x, from.y, from.z)
     sleep(0.4)
     return true
   end
@@ -478,13 +516,13 @@ local function newRobot(world, name)
     loadfile = function() return nil end,
   }, { __index = _G })
 
-  local chunk = assert(load(PBUILD, "=pbuild", "t", env))
+  local chunk = assert(load(source or PBUILD, "=pbuild", "t", env))
   r.co = coroutine.create(function() chunk("/plans/sim.plan") end)
   return r
 end
 
-local function placeRobot(world, name)
-  local r = newRobot(world, name)
+local function placeRobot(world, name, source)
+  local r = newRobot(world, name, source)
   world.robots[key(-1, 0, 0)] = r
   world.list[#world.list + 1] = r
   world.byAddress[r.address] = r
@@ -501,12 +539,12 @@ local function addHook(world, at, fn)
 end
 
 --- Place a robot on the pad once it is free (at or after `at`).
-local function addRobotWhenPadFree(world, at, name)
+local function addRobotWhenPadFree(world, at, name, source)
   local function try()
     if world.robots[key(-1, 0, 0)] then
       addHook(world, world.now + 5, try)
     else
-      placeRobot(world, name)
+      placeRobot(world, name, source)
     end
   end
   addHook(world, at, try)
@@ -592,8 +630,8 @@ local function report(world, label)
     if r.error then errors[#errors + 1] = r.name .. ": " .. r.error end
   end
   check(label .. ": no robot program errors", #errors == 0, errors[1])
-  print(string.format("    simulated %.0f s (%.1f h); robots found another robot in the way %d times",
-    world.now, world.now / 3600, world.robotsMet))
+  print(string.format("    simulated %.0f s (%.1f h); robots found another robot in the way %d times; "
+    .. "%d blocks fell", world.now, world.now / 3600, world.robotsMet, world.fell))
   if not ok or #errors > 0 then dumpRobots(world) end
 end
 
@@ -658,6 +696,45 @@ do
   run(world, 40000)
   report(world, "C")
   check("C: robots met each other and got past", world.robotsMet > 0, "they never met")
+end
+
+-- Old and new robot versions working together, with tiles handed between
+-- them. Runs when a test sets OLD_PBUILD_SOURCE to an older pbuild.lua.
+if OLD_PBUILD_SOURCE then
+  print("Scenario D: old one-layer and new three-layer robots, tiles handed between them")
+  local world = newWorld()
+  world.byAddress = {}
+  addRobotWhenPadFree(world, 0, "old1", OLD_PBUILD_SOURCE)
+  addRobotWhenPadFree(world, 30, "new1")
+  addRobotWhenPadFree(world, 60, "old2", OLD_PBUILD_SOURCE)
+
+  -- Stop a robot mid-tile, collect it and release its tile, as a player would.
+  local function stopAndRelease(at, name)
+    addHook(world, at, function()
+      local r = world.byAddress["addr-" .. name]
+      if not r then return end
+      r.alive = false
+      world.robots[key(r.pos.x, r.pos.y, r.pos.z)] = nil
+      local below = key(r.pos.x, r.pos.y - 1, r.pos.z)
+      if world.blocks[below] == "enderchest" then world.blocks[below] = nil end
+      logic.release(world.s, world.s.robots[r.address].id)
+    end)
+  end
+  stopAndRelease(500, "old1")
+  addRobotWhenPadFree(world, 520, "new2")
+  stopAndRelease(1100, "new1")
+  addRobotWhenPadFree(world, 1120, "old3", OLD_PBUILD_SOURCE)
+  run(world, 80000)
+  report(world, "D")
+  local handoffs = {}
+  for _, r in ipairs(world.list) do
+    for _, line in ipairs(r.logs) do
+      local tile, pass, cell = line:match("%[TILE%] Tile (%d+) %(excavate%), starting at pass (%d+), cell (%d+)")
+      if tile and pass ~= "0" then handoffs[#handoffs + 1] = r.name .. " took tile " .. tile .. " at pass " .. pass end
+    end
+  end
+  print("    released tiles picked up past the travel layer: " ..
+    (#handoffs > 0 and table.concat(handoffs, "; ") or "none"))
 end
 
 print(string.format("\n=== %d passed, %d failed ===", passed, failed))

@@ -47,6 +47,7 @@ function logic.newState(info, tileSize)
     nextId = 1,
     stock = nil,             -- "name@damage" -> true, shared by every robot in the build round
     stockBy = nil,           -- address of the robot taking the stock snapshot
+    holdBuild = false,       -- --excavate-only: do not start the build round
   }
   local g = logic.grid(s)
   for id = 0, g.count - 1 do
@@ -227,6 +228,12 @@ function handlers.claim(s, from, msg, now, ev)
 
   if best == nil then
     if allDone(s) then
+      -- Started with --excavate-only: stop here so the site can be checked.
+      -- Restarting the admin without the flag starts the build round.
+      if s.round == "excavate" and s.holdBuild then
+        return { type = "finished",
+                 reason = "every tile is dug, and the admin was started with --excavate-only" }
+      end
       advanceRound(s, ev)
       return handlers.claim(s, from, msg, now, ev)
     end

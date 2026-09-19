@@ -1,5 +1,5 @@
 -- admin.lua — The coordinator for the parallel builder. Installed as pbadmin.
--- Usage: pbadmin <plan> [--tile <size>] [--new]
+-- Usage: pbadmin <plan> [--tile <size>] [--new] [--excavate-only]
 --
 -- Runs on a computer with a wireless network card, placed above the middle of
 -- the build site. It cuts the plan into tiles (16x16 by default), hands tiles
@@ -8,6 +8,8 @@
 --
 --   --tile <size>  tile size for a new build (default 16)
 --   --new          discard the saved admin state and start the plan over
+--   --excavate-only  stop the robots once every tile is dug, so the site can
+--                  be checked. Restart without it to start building.
 --
 -- Type a command and press Enter:
 --   release <id>      free robot <id>'s tile. Only once that robot is stopped
@@ -96,7 +98,7 @@ end
 -- Setup
 -- ---------------------------------------------------------------------------
 
-local planPath, tileSize, fresh = nil, 16, false
+local planPath, tileSize, fresh, excavateOnly = nil, 16, false, false
 do
   local i = 1
   while i <= #args do
@@ -106,6 +108,8 @@ do
       i = i + 1
     elseif a == "--new" then
       fresh = true
+    elseif a == "--excavate-only" then
+      excavateOnly = true
     elseif a:sub(1, 2) == "--" then
       print("[FATAL] Unknown option " .. a)
       return
@@ -117,7 +121,7 @@ do
 end
 
 if not planPath or not tileSize or tileSize < 1 then
-  print("Usage: pbadmin <plan> [--tile <size>] [--new]")
+  print("Usage: pbadmin <plan> [--tile <size>] [--new] [--excavate-only]")
   return
 end
 
@@ -167,8 +171,10 @@ if not fresh then
 end
 if not state then
   state = logic.newState(info, tileSize)
-  saveTable(config.stateFile, state)
 end
+-- Applies to this run only: restart without the flag to go on to building.
+state.holdBuild = excavateOnly
+saveTable(config.stateFile, state)
 
 -- Uptime restarts with the computer, so every robot counts as just seen.
 local now = computer.uptime()
@@ -241,7 +247,13 @@ local function draw()
     tostring(state.plan.name), tostring(state.plan.version), state.round))
   put(2, string.format("Tiles %d: done %d, working %d, free %d. Travel layer dug: %d",
     sum.total, sum.done, sum.claimed, sum.free, sum.lanes))
-  if state.stock then
+  if state.holdBuild and state.round == "excavate" then
+    if sum.done == sum.total then
+      put(3, "Digging done. Restart without --excavate-only to build.")
+    else
+      put(3, "--excavate-only: robots stop once every tile is dug")
+    end
+  elseif state.stock then
     put(3, "Stock list received (see " .. config.stockFile .. ")")
   elseif state.round == "build" then
     put(3, "Waiting for the first robot to check the chest")

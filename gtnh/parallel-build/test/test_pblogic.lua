@@ -203,6 +203,23 @@ test("the build round starts once every tile is dug, with one stock check", func
   assert_eq(gb.stock["minecraft:dirt@0"], true, "stock handed out")
 end)
 
+test("--excavate-only stops after digging; without it the build round starts", function()
+  local s = newState()
+  local a = robotClient(s, "a")
+  a.hello()
+  s.holdBuild = true
+  for id = 0, 8 do s.tiles[id].status = "done"; s.lane[id] = true end
+
+  local stopped = a.claim(4, { x = 20, y = 1, z = 20 })
+  assert_eq(stopped.type, "finished", "robots are told to stop")
+  assert_eq(type(stopped.reason), "string", "with a reason")
+  assert_eq(s.round, "excavate", "the build round has not started")
+
+  s.holdBuild = false   -- the admin restarted without the flag
+  local got = a.claim(4, { x = 20, y = 1, z = 20 })
+  assert_eq(got.type, "assign"); assert_eq(got.round, "build")
+end)
+
 test("finishing the last build tile ends the build", function()
   local s = newState()
   local a = robotClient(s, "a")

@@ -9,6 +9,10 @@ tile, dig it, report it done, and ask for the next. **Round 1 digs every tile,
 round 2 builds every tile.** You can add robots at any time; they just ask for
 work.
 
+A tile is dug top-down: first the travel layer on its own, so neighbouring
+tiles open up quickly, then three layers per pass (the robot walks the middle
+layer and digs above and below each cell), which saves two moves in three.
+
 ## How robots get around
 
 ```
@@ -78,6 +82,10 @@ Then download the plan on the admin and every robot:
    one is free.
 
 Restarting either program continues where it left off; no flag is needed.
+
+To check the site between digging and building, start the admin with
+`--excavate-only`. Once every tile is dug, robots stop and print why. Restart
+the admin without the flag, then run `pbuild` again on each robot to build.
 
 ## Admin commands
 

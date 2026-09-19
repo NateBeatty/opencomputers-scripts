@@ -116,6 +116,7 @@ local state = {
   deferred = {},             -- cells to retry at the end of a layer
   manualQueue = {},          -- manual.txt lines not yet sent to the admin
   counters = { placed = 0, cleared = 0, skipped = 0, deferred = 0 },
+  digScheme = 3,             -- saved by versions that dig three layers per pass
 }
 
 local adminAddress = nil     -- found fresh each start, never saved
@@ -571,6 +572,19 @@ local function clearBelow()
   return not robot.detectDown()
 end
 
+--- Dig out the block above, re-digging while sand or gravel keeps falling in.
+--- An inventory above (a robot) is left alone. False if the block won't break.
+local function clearAbove()
+  local p = state.pos
+  for _ = 1, config.moveRetries do
+    if not robot.detectUp() then return true end
+    if inventoryAt(sides.up) or not canDig(p.x, p.y + 1, p.z) then return true end
+    if not robot.swingUp() then return false end
+    state.counters.cleared = state.counters.cleared + 1
+  end
+  return not robot.detectUp()
+end
+
 -- ---------------------------------------------------------------------------
 -- Travel between tiles
 -- ---------------------------------------------------------------------------
@@ -966,28 +980,57 @@ local function failReach(why, x, y, z)
   return "error", string.format("could not reach %d,%d,%d (%s)", x, y, z, tostring(why))
 end
 
---- Round 1: dig the tile empty from the travel layer (pass 0, y = H) down to
---- layer 0. Top-down, so falling sand and gravel always land on a layer that
---- still gets dug (see build.lua). Layer 0 is dug from above.
+--- Round 1: dig the tile empty, top-down. First the travel layer on its own
+--- (y = H), so neighbouring tiles open up for other robots as soon as
+--- possible. Then three layers per pass: the robot walks the middle layer and
+--- digs the layer above and the layer below each cell, which saves two moves
+--- in three. When fewer than three layers are left it digs only those.
+---
+--- Top-down keeps falling sand and gravel safe: whatever falls lands on a
+--- layer still to be dug, and the cell above each up-dig was emptied by the
+--- previous pass. Layer 0 is always dug from above, so the ground under the
+--- box is never touched.
+---
+--- state.p counts the layers fully dug from the top (the travel layer is the
+--- first), as older one-layer versions did, so a tile can move between robots
+--- running either version.
 local function excavateTile()
   local x0, z0, w, l = tiles.bounds(g, state.tile)
   local cells = w * l
-  for pass = state.p, H do
-    state.p = pass
-    local y = H - pass
-    local travelY = (y == 0) and 1 or y
+  while state.p <= H do
+    local top = H - state.p            -- the highest layer not yet dug
+    local count, travelY, digUp, digDown
+    if state.p == 0 then
+      count, travelY, digUp, digDown = 1, H, false, false    -- the travel layer alone
+    else
+      count = math.min(3, top + 1)
+      if count == 3 then
+        travelY, digUp, digDown = top - 1, true, true
+      elseif count == 2 then
+        travelY, digUp, digDown = top, false, true
+      else
+        travelY, digUp, digDown = 1, false, true             -- layer 0 alone, from above
+      end
+    end
+    local bottom = top - count + 1
+    -- Alternates the serpentine per pass, so each pass starts where the last ended.
+    local passNo = (state.p == 0) and 0 or (1 + (state.p - 1) // 3)
+
     for index = state.i, cells - 1 do
       state.i = index
-      setPhase("digging", string.format("tile %d, y %d", state.tile, y))
+      setPhase("digging", string.format("tile %d, y %d-%d", state.tile, bottom, top))
       if index % w == 0 and not reportProgress() then return "released" end
 
-      local lx, lz = tiles.cellPosition(pass, index, w, l)
+      local lx, lz = tiles.cellPosition(passNo, index, w, l)
       local x, z = x0 + lx, z0 + lz
       local ok, why = gotoCell(x, travelY, z)
       if not ok then return failReach(why, x, travelY, z) end
 
-      if y == 0 and robot.detectDown() and not clearBelow() then
-        logManual("could not dig", x, 0, z, "unbreakable block")
+      if digUp and not clearAbove() then
+        logManual("could not dig", x, travelY + 1, z, "unbreakable block")
+      end
+      if digDown and robot.detectDown() and not clearBelow() then
+        logManual("could not dig", x, travelY - 1, z, "unbreakable block")
       end
 
       saveState()
@@ -998,6 +1041,7 @@ local function excavateTile()
       if checkCommands() == "stop" then return "stopped" end
       os.sleep(0)
     end
+    state.p = state.p + count
     state.i = 0
     saveState()
   end
@@ -1094,6 +1138,10 @@ end
 local function applyAssignment(reply)
   state.tile, state.round = reply.tile, reply.round
   state.p, state.i = reply.p or 0, reply.i or 0
+  -- Below the travel layer the admin can't tell whether this progress came
+  -- from a one-layer robot, whose cells before `i` are only partly dug. Redo
+  -- the pass from the start of the tile: those cells are mostly air already.
+  if state.round == "excavate" and state.p >= 1 then state.i = 0 end
   state.needStock = reply.needStock == true
   if reply.stock then state.stock = reply.stock end
   state.deferred = {}
@@ -1119,7 +1167,7 @@ local function work(handle)
       setPhase("asking", "for a tile")
       local reply = claim()
       if reply.type == "finished" then
-        return "finished"
+        return "finished", reply.reason
       elseif reply.type == "wait" then
         setPhase("waiting", reply.reason)
         -- Never wait in the travel layer, where other robots need to pass:
@@ -1245,6 +1293,12 @@ local function main()
   if saved and saved.plan and saved.plan.name == info.name and saved.plan.version == info.version
      and saved.plan.crc == info.crc then
     for k, v in pairs(saved) do state[k] = v end
+    if saved.digScheme ~= 3 then
+      -- Saved by a one-layer version: past the travel layer, its position in
+      -- the pass means a different set of dug cells. Redo that pass.
+      if state.round == "excavate" and state.tile ~= nil and state.p >= 1 then state.i = 0 end
+      state.digScheme = 3
+    end
     log(string.format("[RESUME] At (%d,%d,%d) facing %d, tile %s.", state.pos.x, state.pos.y,
       state.pos.z, state.facing, tostring(state.tile)))
   elseif saved then
@@ -1294,7 +1348,12 @@ local function main()
     if result == "finished" then
       setPhase("finished")
       sendStatus(true)
-      log("[DONE] The admin says the build is finished.")
+      if detail then
+        log("[DONE] Nothing left to do: " .. tostring(detail) .. ".")
+        log("[DONE] Once the admin is building, run the same command again.")
+      else
+        log("[DONE] The admin says the build is finished.")
+      end
       break
     elseif result == "stopped" then
       setPhase("stopped")
