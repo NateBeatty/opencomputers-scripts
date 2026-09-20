@@ -689,13 +689,34 @@ do
 end
 
 do
-  print("Scenario C: six robots on small tiles, so they meet in the travel layer")
+  print("Scenario C: six robots on small tiles, with chests blocking the travel layer")
   local world = newWorld(4)
   world.byAddress = {}
+  -- Chests in the travel layer stand in for robots parked in the way: they are
+  -- inventories, so robots must step around them and must never break them.
+  -- A player collects them later, like a stopped robot being picked up, so the
+  -- tiles under them can be finished.
+  local blockers = { key(7, H, 6), key(7, H, 7), key(7, H, 8), key(12, H, 13) }
+  for _, at in ipairs(blockers) do world.blocks[at] = "enderchest" end
+  local intact = 0
+  addHook(world, 700, function()
+    for _, at in ipairs(blockers) do
+      if world.blocks[at] == "enderchest" then intact = intact + 1 end
+      world.blocks[at] = nil
+    end
+  end)
   for n = 1, 6 do addRobotWhenPadFree(world, (n - 1) * 20, "r" .. n) end
   run(world, 40000)
   report(world, "C")
-  check("C: robots met each other and got past", world.robotsMet > 0, "they never met")
+  check("C: robots left the chests in the travel layer alone",
+    intact == #blockers, intact .. " of " .. #blockers .. " still there")
+  local waited = false
+  for _, r in ipairs(world.list) do
+    for _, line in ipairs(r.logs) do
+      if line:find("Blocked by a") then waited = true end
+    end
+  end
+  print("    a robot reported waiting on one: " .. tostring(waited))
 end
 
 -- Old and new robot versions working together, with tiles handed between

@@ -1074,59 +1074,82 @@ local function buildTile(handle)
     state.p = layer
     local layerData = plan.layer(handle, layer)
 
-    local function needFor(key)
-      local n = 0
-      for j = state.i, cells - 1 do
-        local jx, jz = tiles.cellPosition(layer, j, w, l)
-        local entry = plan.paletteEntry(handle.palette,
-          string.byte(layerData, (x0 + jx) + (z0 + jz) * W + 1))
-        if entry and itemKey(entry.itemName, entry.damage) == key then n = n + 1 end
-      end
-      return n
-    end
-
-    for index = state.i, cells - 1 do
-      state.i = index
-      setPhase("building", string.format("tile %d, y %d", state.tile, layer))
-      if index % w == 0 and not reportProgress() then return "released" end
-
-      local lx, lz = tiles.cellPosition(layer, index, w, l)
-      local x, z = x0 + lx, z0 + lz
-      local ok, why = gotoCell(x, layer + 1, z)
-      if not ok then return failReach(why, x, layer + 1, z) end
-
-      -- Energy and fuel BEFORE the cell below is filled: fetching fuel places
-      -- the ender chest into that cell.
-      restIfNeeded()
-      keepGeneratorsFed()
-      processCell(string.byte(layerData, x + z * W + 1), handle.palette, x, layer, z, needFor)
-
-      saveState()
-      sendStatus()
-      if checkCommands() == "stop" then return "stopped" end
-      os.sleep(0)
-    end
-
-    -- Retry the cells that would not place, now that their neighbours exist.
-    if #state.deferred > 0 then
-      local retry = state.deferred
-      state.deferred = {}
-      for _, cell in ipairs(retry) do
-        if gotoCell(cell.x, layer + 1, cell.z) then
-          processCell(cell.v, handle.palette, cell.x, layer, cell.z, function() return #retry end)
+    -- Is there anything to place on this layer inside this tile? Most upper
+    -- layers of a plan are air, and walking one costs a whole pass over the
+    -- tile. A skipped layer is not checked for leftover blocks, which is safe
+    -- because the dig round emptied the box.
+    local anyWork = false
+    for z = z0, z0 + l - 1 do
+      for x = x0, x0 + w - 1 do
+        local v = string.byte(layerData, x + z * W + 1)
+        if v ~= plan.PALETTE_AIR and v ~= plan.PALETTE_SKIP then
+          anyWork = true
+          break
         end
-        saveState()
       end
-      for _, cell in ipairs(state.deferred) do
-        local entry = plan.paletteEntry(handle.palette, cell.v)
-        logManual("could not place", cell.x, layer, cell.z,
-          entry and entry.itemName or ("index " .. cell.v))
-      end
-      state.deferred = {}
+      if anyWork then break end
     end
 
-    state.i = 0
-    saveState()
+    if not anyWork then
+      state.i = 0
+      setPhase("building", string.format("tile %d, y %d is empty", state.tile, layer))
+      if not reportProgress() then return "released" end
+      saveState()
+    else
+      local function needFor(key)
+        local n = 0
+        for j = state.i, cells - 1 do
+          local jx, jz = tiles.cellPosition(layer, j, w, l)
+          local entry = plan.paletteEntry(handle.palette,
+            string.byte(layerData, (x0 + jx) + (z0 + jz) * W + 1))
+          if entry and itemKey(entry.itemName, entry.damage) == key then n = n + 1 end
+        end
+        return n
+      end
+
+      for index = state.i, cells - 1 do
+        state.i = index
+        setPhase("building", string.format("tile %d, y %d", state.tile, layer))
+        if index % w == 0 and not reportProgress() then return "released" end
+
+        local lx, lz = tiles.cellPosition(layer, index, w, l)
+        local x, z = x0 + lx, z0 + lz
+        local ok, why = gotoCell(x, layer + 1, z)
+        if not ok then return failReach(why, x, layer + 1, z) end
+
+        -- Energy and fuel BEFORE the cell below is filled: fetching fuel places
+        -- the ender chest into that cell.
+        restIfNeeded()
+        keepGeneratorsFed()
+        processCell(string.byte(layerData, x + z * W + 1), handle.palette, x, layer, z, needFor)
+
+        saveState()
+        sendStatus()
+        if checkCommands() == "stop" then return "stopped" end
+        os.sleep(0)
+      end
+
+      -- Retry the cells that would not place, now that their neighbours exist.
+      if #state.deferred > 0 then
+        local retry = state.deferred
+        state.deferred = {}
+        for _, cell in ipairs(retry) do
+          if gotoCell(cell.x, layer + 1, cell.z) then
+            processCell(cell.v, handle.palette, cell.x, layer, cell.z, function() return #retry end)
+          end
+          saveState()
+        end
+        for _, cell in ipairs(state.deferred) do
+          local entry = plan.paletteEntry(handle.palette, cell.v)
+          logManual("could not place", cell.x, layer, cell.z,
+            entry and entry.itemName or ("index " .. cell.v))
+        end
+        state.deferred = {}
+      end
+
+      state.i = 0
+      saveState()
+    end
   end
   return "done"
 end

@@ -13,6 +13,9 @@ A tile is dug top-down: first the travel layer on its own, so neighbouring
 tiles open up quickly, then three layers per pass (the robot walks the middle
 layer and digs above and below each cell), which saves two moves in three.
 
+When building, a robot skips a layer entirely if the plan has nothing to place
+on it inside its tile, which is most upper layers of a plan.
+
 ## How robots get around
 
 ```
