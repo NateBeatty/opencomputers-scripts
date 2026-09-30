@@ -25,7 +25,10 @@
 const fs = require('fs');
 const path = require('path');
 const { parseSchematic } = require('./lib/schematic.js');
-const { encode, buildPalette, parseHeader, PALETTE_AIR, PALETTE_SKIP, PALETTE_BASE } = require('./lib/plan.js');
+const {
+  encode, buildPalette, parseHeader, PALETTE_AIR, PALETTE_SKIP, PALETTE_BASE,
+  FLAG_ORIENT, FLAG_SLAB_TOP, FLAG_SLAB_BOTTOM,
+} = require('./lib/plan.js');
 const { crc32 } = require('./lib/crc32.js');
 const blockitem = require('./lib/blockitem.js');
 const varint = require('./lib/varint.js');
@@ -342,10 +345,14 @@ function convertSchematic(schematic, opts) {
       cellActions[i] = { paletteIdx: PALETTE_SKIP };
       stats.skip++;
     } else {
-      // place
-      const pKey = res.item + '|' + res.damage;
+      // place. Upper and lower slabs are the same item, but each half gets its
+      // own palette entry so the robot knows where to click.
+      const half = blockitem.slabHalf(name, cell.meta);
+      const pKey = res.item + '|' + res.damage + (half ? '|' + half : '');
       if (!paletteIndex.has(pKey)) {
-        const flags = res.fuzzy ? 0x01 : 0x00;
+        let flags = res.fuzzy ? FLAG_ORIENT : 0x00;
+        if (half === 'top') flags |= FLAG_SLAB_TOP;
+        if (half === 'bottom') flags |= FLAG_SLAB_BOTTOM;
         paletteItems.push({
           itemName: res.item,
           damage: res.damage,

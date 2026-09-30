@@ -111,6 +111,8 @@ test("palette constants", function()
   assert_eq(plan.PALETTE_BASE, 2)
   assert_eq(plan.FLAG_ORIENT, 0x01)
   assert_eq(plan.FLAG_TILEENTITY, 0x02)
+  assert_eq(plan.FLAG_SLAB_TOP, 0x04)
+  assert_eq(plan.FLAG_SLAB_BOTTOM, 0x08)
 end)
 
 test("bad magic rejected", function()

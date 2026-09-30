@@ -906,8 +906,61 @@ local function acquireMaterial(key, need)
   return findSlot(key)
 end
 
+-- Slabs. Upper and lower slabs are one item: vanilla picks the half from where
+-- the click lands. The top face of a block gives a lower slab; a bottom face,
+-- or a side face above its middle, gives an upper one. OC's plain placeDown
+-- first clicks the top of the block under the cell, but only reaches 0.16 into
+-- it, so over air or a lower slab it falls back to clicking a neighbour's side
+-- at 0.61 of its height, or (Angel) the bottom face: an upper slab either way.
+
+-- A direction (0..3, as state.facing) as a side relative to the robot.
+local RELATIVE = { [0] = sides.front, [1] = sides.right, [2] = sides.back, [3] = sides.left }
+
+--- Place an upper slab into the cell below. Clicking a neighbour's side from
+--- above lands at 0.61 of its height, and with nothing there the Angel places
+--- against the bottom face: both give an upper slab. A lower-slab neighbour is
+--- not clicked: the ray would reach its top face and put the slab on top of it.
+local function placeSlabTop(isLowerSlabAt)
+  local p = state.pos
+  for d = 0, 3 do
+    if not isLowerSlabAt(p.x + DX[d], p.z + DZ[d])
+       and robot.placeDown(RELATIVE[(d - state.facing) % 4]) then
+      return true
+    end
+  end
+  return false
+end
+
+--- Place a lower slab into the cell below. From above this only works with a
+--- full block under the cell, so the robot drops into the cell, steps into an
+--- empty neighbour inside its tile, and places back toward the cell: that click
+--- lands at exactly mid height (on the far neighbour's side, or the Angel's
+--- side face), which gives a lower slab. Then it climbs back above the cell.
+--- @return true if placed, or false plus "no-room" when no neighbour was free
+local function placeSlabBottom(slot)
+  local x, y, z = state.pos.x, state.pos.y - 1, state.pos.z
+  if not step("down") then return false end
+  local placed, room = false, false
+  for d = 0, 3 do
+    if tiles.tileOf(g, x + DX[d], z + DZ[d]) == state.tile then
+      turnTo(d)
+      if not robot.detect() and tryMove("forward") == "moved" then
+        room = true
+        turnTo((d + 2) % 4)
+        robot.select(slot)
+        placed = robot.place(sides.front)
+        break
+      end
+    end
+  end
+  gotoCell(x, y + 1, z)
+  if not room then return false, "no-room" end
+  return placed
+end
+
 --- `needFor(key)` counts the cells still to do that need `key` (for restocking).
-local function processCell(cellValue, palette, x, y, z, needFor)
+--- `cellAt(x, z)` is the plan's cell value on this layer, nil outside the plan.
+local function processCell(cellValue, palette, x, y, z, needFor, cellAt)
   if cellValue == plan.PALETTE_AIR then
     if robot.detectDown() then clearBelow() end
     return
@@ -934,6 +987,38 @@ local function processCell(cellValue, palette, x, y, z, needFor)
     return
   end
   robot.select(slot)
+
+  local slabTop = (entry.flags & plan.FLAG_SLAB_TOP) ~= 0
+  local slabBottom = (entry.flags & plan.FLAG_SLAB_BOTTOM) ~= 0
+  if slabTop or slabBottom then
+    -- compareDown can't tell the halves apart, so a slab already there is
+    -- always replaced: it may be a wrong half from an earlier build.
+    if robot.detectDown() then clearBelow() end
+    local placed, why
+    if slabTop then
+      placed = placeSlabTop(function(nx, nz)
+        local v = cellAt(nx, nz)
+        local e = v and plan.paletteEntry(palette, v)
+        return e ~= nil and (e.flags & plan.FLAG_SLAB_BOTTOM) ~= 0
+      end)
+    else
+      placed, why = placeSlabBottom(slot)
+      if why == "no-room" then
+        -- No free neighbour to place from: from above it is a lower slab only
+        -- if a full block is under the cell.
+        robot.select(slot)
+        placed = robot.placeDown()
+        if placed then logManual("check slab is the lower half", x, y, z, entry.itemName) end
+      end
+    end
+    if placed then
+      state.counters.placed = state.counters.placed + 1
+    else
+      state.deferred[#state.deferred + 1] = { x = x, z = z, v = cellValue }
+      state.counters.deferred = state.counters.deferred + 1
+    end
+    return
+  end
 
   local fuzzy = (entry.flags & plan.FLAG_ORIENT) ~= 0
   if robot.compareDown(fuzzy) then return end   -- the right block is already there
@@ -1053,7 +1138,7 @@ end
 local function buildTile(handle)
   local x0, z0, w, l = tiles.bounds(g, state.tile)
   local cells = w * l
-  local W = handle.header.width
+  local W, L = handle.header.width, handle.header.length
 
   if state.needStock then
     local lx, lz = tiles.cellPosition(state.p, state.i, w, l)
@@ -1106,6 +1191,10 @@ local function buildTile(handle)
         end
         return n
       end
+      local function cellAt(cx, cz)
+        if cx < 0 or cz < 0 or cx >= W or cz >= L then return nil end
+        return string.byte(layerData, cx + cz * W + 1)
+      end
 
       for index = state.i, cells - 1 do
         state.i = index
@@ -1121,7 +1210,8 @@ local function buildTile(handle)
         -- the ender chest into that cell.
         restIfNeeded()
         keepGeneratorsFed()
-        processCell(string.byte(layerData, x + z * W + 1), handle.palette, x, layer, z, needFor)
+        processCell(string.byte(layerData, x + z * W + 1), handle.palette, x, layer, z, needFor,
+          cellAt)
 
         saveState()
         sendStatus()
@@ -1135,7 +1225,8 @@ local function buildTile(handle)
         state.deferred = {}
         for _, cell in ipairs(retry) do
           if gotoCell(cell.x, layer + 1, cell.z) then
-            processCell(cell.v, handle.palette, cell.x, layer, cell.z, function() return #retry end)
+            processCell(cell.v, handle.palette, cell.x, layer, cell.z, function() return #retry end,
+              cellAt)
           end
           saveState()
         end

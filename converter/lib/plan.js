@@ -33,6 +33,8 @@ const PALETTE_BASE = 2;
 // Palette flags bits.
 const FLAG_ORIENT = 0x01;  // bit0: orientation-bearing (use fuzzy compare)
 const FLAG_TILEENTITY = 0x02; // bit1: had tile-entity data (report only)
+const FLAG_SLAB_TOP = 0x04;    // bit2: a slab in the upper half of its cell
+const FLAG_SLAB_BOTTOM = 0x08; // bit3: a slab in the lower half of its cell
 
 /**
  * Encode a plan from schematic cells.
@@ -258,5 +260,5 @@ module.exports = {
   encode, decode, parseHeader, buildPalette,
   MAGIC, FORMAT_VERSION,
   PALETTE_AIR, PALETTE_SKIP, PALETTE_BASE,
-  FLAG_ORIENT, FLAG_TILEENTITY,
+  FLAG_ORIENT, FLAG_TILEENTITY, FLAG_SLAB_TOP, FLAG_SLAB_BOTTOM,
 };

@@ -74,15 +74,20 @@ local serialization = { serialize = serialize, unserialize = unserialize }
 -- three-layer pass, and a two-layer pass at the bottom.
 local W, H, L, TILE = 20, 5, 20, 8
 
+local SLAB = "minecraft:stone_slab"
 local PALETTE = {
   { flags = 0, itemName = "minecraft:dirt", damage = 0, blockName = "minecraft:dirt", meta = 0 },
   { flags = 0, itemName = "minecraft:cobblestone", damage = 0, blockName = "minecraft:cobblestone", meta = 0 },
+  { flags = realPlan.FLAG_SLAB_TOP, itemName = SLAB, damage = 0, blockName = SLAB, meta = 8 },
+  { flags = realPlan.FLAG_SLAB_BOTTOM, itemName = SLAB, damage = 0, blockName = SLAB, meta = 0 },
 }
 
---- Palette index of each cell: a dirt floor, a scatter of cobblestone, air above.
+--- Palette index of each cell: a dirt floor, a scatter of cobblestone, then a
+--- scatter of upper and lower slabs, mostly over air. Air above.
 local function planCell(x, y, z)
   if y == 0 then return 2 end
   if y == 1 and (x + 2 * z) % 5 == 0 then return 3 end
+  if y == 2 and (3 * x + z) % 4 == 0 then return (x + z) % 2 == 0 and 5 or 4 end
   return 0
 end
 
@@ -164,6 +169,7 @@ local function newWorld(tileSize)
   end
   stock("minecraft:dirt", 18)
   stock("minecraft:cobblestone", 6)
+  stock(SLAB, 3)
   stock("minecraft:coal", 3)
   return world
 end
@@ -171,6 +177,39 @@ end
 local function blockAt(world, x, y, z)
   if y < 0 then return "ground" end
   return world.blocks[key(x, y, z)]
+end
+
+-- Slabs are stored as "name#top" or "name#bottom". The half a robot gets
+-- follows OpenComputers' click geometry (Agent.place and pick, traced in
+-- pbuild.lua): the sim checks where pbuild clicks, not that geometry itself.
+local function slabHalf(b) return b and b:match("#(%a+)$") end
+
+-- Relative sides (OpenOS: back 2, front 3, right 4, left 5) as turns to the right.
+local REL_DIR = { [3] = 0, [4] = 1, [2] = 2, [5] = 3 }
+
+--- The item a block drops or was placed from.
+local function itemOf(b) return DROPS[b] or (b:gsub("#.*$", "")) end
+
+--- Placing a slab into (x, y, z) from the robot above it, clicking `dir`:
+--- "down", or a direction 0..3 toward a neighbour. With the Angel upgrade a
+--- click that reaches nothing places against the cell's bottom face.
+--- @return "top", "bottom", or "diagonal" (it lands on top of the neighbour)
+local function slabFromAbove(world, x, y, z, dir)
+  if dir == "down" then
+    -- The ray reaches 0.16 into the cell below: it finds a block whose top
+    -- face is at the top of its cell, which a lower slab's is not.
+    local b = blockAt(world, x, y - 1, z)
+    if b ~= nil and slabHalf(b) ~= "bottom" then return "bottom" end
+    if world.robots[key(x, y - 1, z)] then return "bottom" end
+    return "top"
+  end
+  local nx, nz = x + DX[dir], z + DZ[dir]
+  if world.robots[key(nx, y, nz)] then return "top" end
+  local b = blockAt(world, nx, y, nz)
+  if b == nil then return "top" end
+  -- The side is reached at 0.61 of its height; a lower slab's top face first.
+  if slabHalf(b) == "bottom" then return "diagonal" end
+  return "top"
 end
 
 local function emptyCell(world, x, y, z)
@@ -312,7 +351,7 @@ local function newRobot(world, name, source)
     end
     checkOwnTile(world, r, x, y, z, "dug")
     world.blocks[key(x, y, z)] = nil
-    addItem(r, DROPS[b] or b, 1)
+    addItem(r, itemOf(b), 1)
     settle(world, x, y, z)
     sleep(0.4)
     return true, "block"
@@ -355,7 +394,9 @@ local function newRobot(world, name, source)
       local st = r.inv[r.selected]
       return st ~= nil and blockAt(world, cellFor(0)) == st.name
     end,
-    placeDown = function()
+    -- face: the side to click, relative to the robot (nil: OC tries down
+    -- first, and with the Angel a miss there places against the bottom face).
+    placeDown = function(face)
       local st = r.inv[r.selected]
       local x, y, z = cellFor(0)
       if not st or occupied(x, y, z) then sleep(0.05) return false end
@@ -366,7 +407,34 @@ local function newRobot(world, name, source)
       else
         checkOwnTile(world, r, x, y, z, "placed " .. st.name)
       end
+      if st.name == SLAB then
+        local dir = "down"
+        if face ~= nil and face ~= 0 then dir = (r.facing + REL_DIR[face]) % 4 end
+        local half = slabFromAbove(world, x, y, z, dir)
+        if half == "diagonal" then
+          violation(world, string.format("%s clicked the top of a lower slab placing at %d,%d,%d",
+            r.name, x, y, z))
+          sleep(0.4)
+          return false
+        end
+        placed = SLAB .. "#" .. half
+      end
       world.blocks[key(x, y, z)] = placed
+      st.size = st.size - 1
+      if st.size == 0 then r.inv[r.selected] = nil end
+      sleep(0.4)
+      return true
+    end,
+    -- Placing forward clicks at exactly mid height, so a slab is a lower one.
+    place = function(face)
+      local st = r.inv[r.selected]
+      local x, y, z = cellFor(3)
+      if not st or occupied(x, y, z) then sleep(0.05) return false end
+      if face ~= nil and face ~= 3 then
+        violation(world, r.name .. " placed forward clicking side " .. tostring(face))
+      end
+      checkOwnTile(world, r, x, y, z, "placed " .. st.name)
+      world.blocks[key(x, y, z)] = st.name == SLAB and (SLAB .. "#bottom") or st.name
       st.size = st.size - 1
       if st.size == 0 then r.inv[r.selected] = nil end
       sleep(0.4)
@@ -498,7 +566,8 @@ local function newRobot(world, name, source)
 
   local modules = {
     component = component, computer = computer, robot = robotApi,
-    sides = { bottom = 0, top = 1, back = 2, front = 3, down = 0, up = 1, forward = 3 },
+    sides = { bottom = 0, top = 1, back = 2, front = 3, right = 4, left = 5,
+              down = 0, up = 1, forward = 3 },
     serialization = serialization, filesystem = filesystem, event = event,
     plan = mockPlan, pbtiles = tiles,
   }
@@ -595,6 +664,8 @@ local function checkBuilt(world)
         if y < H then
           local entry = realPlan.paletteEntry(PALETTE, planCell(x, y, z))
           want = entry and entry.itemName or nil
+          if entry and (entry.flags & realPlan.FLAG_SLAB_TOP) ~= 0 then want = want .. "#top" end
+          if entry and (entry.flags & realPlan.FLAG_SLAB_BOTTOM) ~= 0 then want = want .. "#bottom" end
         end
         local got = world.blocks[key(x, y, z)]
         if got ~= want then

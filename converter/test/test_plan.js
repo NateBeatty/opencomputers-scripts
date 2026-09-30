@@ -143,5 +143,55 @@ test('large palette indices (varint multi-byte)', () => {
   assert.strictEqual(p.palette[100].itemName, 'item100');
 });
 
+console.log('\nConverter:');
+
+test('upper and lower slabs get separate palette entries', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const zlib = require('zlib');
+  const { execFileSync } = require('child_process');
+  const nbt = require('../lib/nbt.js');
+  const { FLAG_SLAB_TOP, FLAG_SLAB_BOTTOM } = require('../lib/plan.js');
+
+  // Four cells in a row: lower stone slab, upper stone slab, lower again, stone.
+  const sch = {
+    Width: { type: 'short', value: 4 },
+    Height: { type: 'short', value: 1 },
+    Length: { type: 'short', value: 1 },
+    Blocks: { type: 'byteArray', value: [44, 44, 44, 1] },
+    Data: { type: 'byteArray', value: [0, 8, 0, 0] },
+    SchematicaMapping: { type: 'compound', value: {
+      'minecraft:stone_slab': { type: 'short', value: 44 },
+      'minecraft:stone': { type: 'short', value: 1 },
+    } },
+  };
+  const writer = new nbt.Writer();
+  writer.byte(10);
+  writer.string('Schematic');
+  writer.compound({ Schematic: { type: 'compound', value: sch } });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'slabs-'));
+  const input = path.join(dir, 'slabs.schematic');
+  fs.writeFileSync(input, zlib.gzipSync(Buffer.from(writer.getData())));
+  execFileSync(process.execPath, [path.join(__dirname, '..', 'schem2plan.js'), input, '--quiet']);
+
+  const p = decode(fs.readFileSync(path.join(dir, 'slabs.plan')));
+  const entry = (cell) => p.palette[p.layers[0][cell] - PALETTE_BASE];
+  assert.strictEqual(entry(0).itemName, 'minecraft:stone_slab');
+  assert.strictEqual(entry(0).damage, 0);
+  assert.strictEqual(entry(1).itemName, 'minecraft:stone_slab');
+  assert.strictEqual(entry(1).damage, 0);
+  assert.notStrictEqual(p.layers[0][0], p.layers[0][1], 'the halves share an entry');
+  assert.strictEqual(p.layers[0][0], p.layers[0][2], 'two lower slabs share one entry');
+  assert.strictEqual(entry(0).flags & (FLAG_SLAB_TOP | FLAG_SLAB_BOTTOM), FLAG_SLAB_BOTTOM);
+  assert.strictEqual(entry(1).flags & (FLAG_SLAB_TOP | FLAG_SLAB_BOTTOM), FLAG_SLAB_TOP);
+  assert.strictEqual(entry(3).flags & (FLAG_SLAB_TOP | FLAG_SLAB_BOTTOM), 0, 'stone is not a slab');
+
+  // Both halves count toward one line of the materials manifest.
+  const manifest = fs.readFileSync(path.join(dir, 'slabs.manifest.txt'), 'utf8');
+  assert.match(manifest, /^minecraft:stone_slab,0,3,/m);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 console.log(`\n=== ${passed} passed, ${failed} failed ===`);
 process.exit(failed > 0 ? 1 : 0);

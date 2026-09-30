@@ -16,6 +16,15 @@ layer and digs above and below each cell), which saves two moves in three.
 When building, a robot skips a layer entirely if the plan has nothing to place
 on it inside its tile, which is most upper layers of a plan.
 
+**Slabs** are placed in the half the schematic shows (plans converted since
+upper and lower slabs got separate palette entries). An upper slab is placed
+from above by clicking a neighbour's side. A lower slab needs a click at mid
+height, so the robot drops into the cell, steps into an empty neighbour inside
+its tile and places back toward it. If no neighbour is free it places from
+above and adds a "check slab is the lower half" line to the manual list. A slab
+already in a cell is always dug and placed again, since the robot can't tell
+the halves apart.
+
 ## How robots get around
 
 ```

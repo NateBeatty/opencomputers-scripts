@@ -102,6 +102,16 @@ function familyDamage(name, meta) {
 }
 
 /**
+ * Which half of its cell a vanilla slab fills. Both halves are the same item,
+ * so the robot needs this to know where to click when placing it.
+ * @returns {'top'|'bottom'|null} null for anything that is not a slab
+ */
+function slabHalf(name, meta) {
+  if (!SLAB_FAMILY.has(shortName(name))) return null;
+  return (meta & 8) ? 'top' : 'bottom';
+}
+
+/**
  * Resolve a block to its placement action using the built-in tables only.
  *
  * @param {string|null} name - 1.7.10 registry name (may be null)
@@ -125,6 +135,6 @@ function resolve(name, id) {
 }
 
 module.exports = {
-  resolve, familyDamage, shortName, vanilla,
+  resolve, familyDamage, slabHalf, shortName, vanilla,
   ACTIONS, NAME_MAP, AIR_BLOCKS, SKIP_BLOCKS,
 };

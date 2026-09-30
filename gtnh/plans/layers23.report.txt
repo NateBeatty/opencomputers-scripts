@@ -1,5 +1,5 @@
 # OC Schematic Conversion Report
-# Generated: 2026-09-30T12:35:26.545Z
+# Generated: 2026-09-30T13:30:11.810Z
 # Input: gtnh/schematics/layers23.schematic
 # Plan name: layers23
 # Dimensions: 271 x 22 x 271
@@ -70,7 +70,7 @@
 - Air (cleared): 1378282
 - Skipped: 679
 - Placed: 236741
-- Palette entries: 45
+- Palette entries: 47
 
 ## Estimates (one generator, no charger)
 - Cells the robot visits: 1615702

@@ -42,6 +42,8 @@ plan.PALETTE_BASE = 2
 -- Palette flags bits.
 plan.FLAG_ORIENT = 0x01     -- bit0: orientation-bearing (use fuzzy compare)
 plan.FLAG_TILEENTITY = 0x02 -- bit1: had tile-entity data (report only)
+plan.FLAG_SLAB_TOP = 0x04   -- bit2: a slab in the upper half of its cell
+plan.FLAG_SLAB_BOTTOM = 0x08 -- bit3: a slab in the lower half of its cell
 
 -- Layers decode to one byte per cell, so the palette cannot exceed the byte
 -- range (indices 0..255, of which 0 and 1 are reserved).
