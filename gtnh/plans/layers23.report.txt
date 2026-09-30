@@ -1,0 +1,83 @@
+# OC Schematic Conversion Report
+# Generated: 2026-09-30T12:35:26.545Z
+# Input: gtnh/schematics/layers23.schematic
+# Plan name: layers23
+# Dimensions: 271 x 22 x 271
+# Rotation: 0 degrees
+
+## Block summary
+| Block | ID | Meta | Count | Action | Reason |
+|-------|-----|------|-------|--------|--------|
+| minecraft:air:0 | 0 | 0 | 1378281 | air | builtin-air |
+| Ztones:tile.iszmBlock:1 | 2363 | 1 | 95301 | place | unverified |
+| chisel:glass:6 | 917 | 6 | 48888 | place | unverified |
+| gregtech:gt.blockstones:7 | 2144 | 7 | 38907 | place | itempanel-exact |
+| chisel:diorite:1 | 907 | 1 | 23715 | place | unverified |
+| chisel:laboratoryblock:7 | 973 | 7 | 10858 | place | unverified |
+| minecraft:stone_slab:8 | 44 | 8 | 6145 | place | itempanel-family(0) |
+| minecraft:stone_slab:0 | 44 | 0 | 4716 | place | itempanel-exact |
+| minecraft:leaves:14 | 18 | 14 | 4546 | place | family-rule |
+| minecraft:leaves:6 | 18 | 6 | 1273 | place | family-rule |
+| minecraft:stone:0 | 1 | 0 | 853 | place | itempanel-exact |
+| ForgeMultipart:block:0 | 474 | 0 | 678 | skip | builtin-skip |
+| ProjRed|Exploration:projectred.exploration.stone:0 | 3700 | 0 | 192 | place | itempanel-exact |
+| chisel:glass_pane:2 | 919 | 2 | 183 | place | unverified |
+| minecraft:wooden_slab:9 | 126 | 9 | 160 | place | family-rule |
+| minecraft:sand:0 | 12 | 0 | 150 | place | itempanel-exact |
+| ProjRed|Exploration:projectred.exploration.stonewalls:0 | 3701 | 0 | 115 | place | unverified |
+| ProjRed|Illumination:projectred.illumination.lamp:0 | 3556 | 0 | 108 | place | itempanel-exact |
+| minecraft:log:1 | 17 | 1 | 104 | place | itempanel-exact |
+| ArchitectureCraft:shape:0 | 1532 | 0 | 77 | place | itempanel-exact |
+| Botania:stone:6 | 1698 | 6 | 70 | place | itempanel-exact |
+| minecraft:wooden_slab:13 | 126 | 13 | 57 | place | family-rule |
+| minecraft:wooden_slab:5 | 126 | 5 | 54 | place | family-rule |
+| etfuturum:bark:1 | 4077 | 1 | 48 | place | itempanel-exact |
+| etfuturum:bark:9 | 4077 | 9 | 47 | place | unverified |
+| minecraft:oak_stairs:1 | 53 | 1 | 36 | place | itempanel-family(0) |
+| etfuturum:bark:5 | 4077 | 5 | 34 | place | unverified |
+| minecraft:grass:0 | 2 | 0 | 24 | place | --itemmap |
+| LogisticsPipes:logisticsPipeBlock:0 | 3715 | 0 | 16 | place | unverified |
+| irontank:silverTank:0 | 3267 | 0 | 12 | place | unverified |
+| minecraft:quartz_block:0 | 155 | 0 | 8 | place | itempanel-exact |
+| Railcraft:cube:1 | 786 | 1 | 7 | place | itempanel-exact |
+| cookingforblockheads:cabinet:3 | 3661 | 3 | 4 | place | unverified |
+| minecraft:dark_oak_stairs:6 | 164 | 6 | 3 | place | family-rule |
+| BiblioCraft:BiblioShelf:6 | 2854 | 6 | 3 | place | unverified |
+| minecraft:dark_oak_stairs:4 | 164 | 4 | 3 | place | family-rule |
+| minecraft:dark_oak_stairs:5 | 164 | 5 | 2 | place | family-rule |
+| EnderIO:blockCapBank:0 | 1387 | 0 | 2 | place | itempanel-exact |
+| DraconicEvolution:draconiumChest:0 | 3082 | 0 | 2 | place | itempanel-exact |
+| minecraft:dark_oak_stairs:7 | 164 | 7 | 2 | place | family-rule |
+| EnderIO:blockConduitBundle:0 | 1430 | 0 | 2 | place | itempanel-exact |
+| Botania:storage:3 | 1607 | 3 | 2 | place | itempanel-exact |
+| IronChest:BlockIronChest:2 | 1495 | 2 | 1 | place | itempanel-exact |
+| minecraft:ender_chest:3 | 130 | 3 | 1 | place | itempanel-family(0) |
+| Forestry:factory2:2 | 1373 | 2 | 1 | place | itempanel-exact |
+| gregtech:gt.blockmachines:1 | 2132 | 1 | 1 | place | itempanel-exact |
+| EnderIO:blockPainter:0 | 1388 | 0 | 1 | place | itempanel-exact |
+| BiblioCraft:BiblioSeats:6 | 2869 | 6 | 1 | place | unverified |
+| BiblioCraft:BiblioPaneler:0 | 2837 | 0 | 1 | place | itempanel-exact |
+| minecraft:crafting_table:0 | 58 | 0 | 1 | place | itempanel-exact |
+| minecraft:air:4 | 0 | 4 | 1 | air | builtin-air |
+| LogisticsPipes:logisticsSolidBlock:1 | 3714 | 1 | 1 | place | itempanel-exact |
+| BiblioCraft:Bibliotheca:6 | 2851 | 6 | 1 | place | unverified |
+| BiblioCraft:BiblioPotionShelf:6 | 2853 | 6 | 1 | place | unverified |
+| minecraft:log:9 | 17 | 9 | 1 | place | itempanel-family(1) |
+| minecraft:double_wooden_slab:5 | 125 | 5 | 1 | skip | builtin-skip |
+
+## Totals
+- Total cells: 1615702
+- Air (cleared): 1378282
+- Skipped: 679
+- Placed: 236741
+- Palette entries: 45
+
+## Estimates (one generator, no charger)
+- Cells the robot visits: 1615702
+- Estimated time: 538.6 hours
+- Estimated energy: 32314040
+- Estimated fuel: ~25246 coal (~395 stacks)
+
+## Skipped blocks (not placeable)
+- ForgeMultipart:block:0 (678x) — builtin-skip
+- minecraft:double_wooden_slab:5 (1x) — builtin-skip
