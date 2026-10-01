@@ -128,11 +128,16 @@ waits beside it and reports `blocked` instead of digging it out.
 
 | Where | File | Contents |
 |---|---|---|
-| Admin | `/home/pbuild_admin.txt` | Tiles, owners, progress (resume state) |
+| Admin | `/home/pbuild_admin.txt` (+`.b`) | Tiles, owners, progress (resume state) |
 | Admin | `/home/pbuild_manual.txt` | Cells robots could not dig or place |
 | Admin | `/home/pbuild_stock.txt` | Plan items that are stocked or skipped |
 | Admin | `/home/pbuild_log.txt` | The admin's log lines |
-| Robot | `/home/pbuild_state.txt` | The robot's own progress, saved every move |
+| Robot | `/home/pbuild_state.txt` (+`.b`) | The robot's own progress, saved every move |
+
+State is written to the two files in turn, and the newest whole one is loaded,
+so no file is ever created or deleted mid-run (Server Utilities' backup fails
+on a file that disappears while it runs). A leftover `*.tmp` from older
+versions is harmless.
 
 Fuel and restock settings come from `/etc/builder.cfg`, as for `build.lua`.
 `/etc/pbuild.cfg` can override anything, e.g. `return { port = 5657 }` (ports go up to 65535).

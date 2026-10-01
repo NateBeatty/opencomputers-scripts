@@ -86,23 +86,50 @@ local state = {
 
 local function log(msg) print(msg) end
 
-local function saveState()
-  local tmp = config.stateFile .. ".tmp"
-  local f = io.open(tmp, "w")
-  if not f then return end
-  f:write(serialization.serialize(state))
-  f:close()
-  filesystem.remove(config.stateFile)
-  filesystem.rename(tmp, config.stateFile)
+-- Progress goes to two files in turn, each stamped with a save count, and
+-- loading takes the newest that reads back whole. No file is created,
+-- renamed or deleted while the program runs: Server Utilities' backup lists
+-- the world folder first and fails on any file gone by the time it reads it.
+local saveCount
+
+local function stateSlots() return { config.stateFile, config.stateFile .. ".b" } end
+
+local function readSaved()
+  local newest
+  for _, path in ipairs(stateSlots()) do
+    local f = io.open(path, "r")
+    if f then
+      local content = f:read("*a")
+      f:close()
+      local ok, data = pcall(serialization.unserialize, content)
+      if ok and type(data) == "table" then
+        -- No count: written by the old single-file save.
+        if data.saveCount == nil then data = { saveCount = 0, state = data } end
+        if not newest or data.saveCount > newest.saveCount then newest = data end
+      end
+    end
+  end
+  return newest
 end
 
-local function loadState()
-  local f = io.open(config.stateFile, "r")
-  if not f then return nil end
-  local content = f:read("*a")
+--- Save `value` as the newest state; nil marks the fill finished.
+local function writeState(value)
+  if not saveCount then
+    local newest = readSaved()
+    saveCount = newest and newest.saveCount or 0
+  end
+  saveCount = saveCount + 1
+  local f = io.open(stateSlots()[saveCount % 2 + 1], "w")
+  if not f then return end
+  f:write(serialization.serialize({ saveCount = saveCount, state = value }))
   f:close()
-  local ok, data = pcall(serialization.unserialize, content)
-  if ok and type(data) == "table" then return data end
+end
+
+local function saveState() writeState(state) end
+
+local function loadState()
+  local newest = readSaved()
+  if newest and type(newest.state) == "table" then return newest.state end
   return nil
 end
 
@@ -614,7 +641,7 @@ local function main()
 
   travelTo(0, 0)
   turnTo(0)
-  filesystem.remove(config.stateFile)
+  writeState(nil)
   log(string.format("[DONE] Placed %d, failed %d. The robot is above its starting cell.",
     state.placed, state.failed))
 end

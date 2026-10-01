@@ -70,24 +70,47 @@ end
 -- Files
 -- ---------------------------------------------------------------------------
 
+-- A table is saved to two files in turn, each stamped with a save count, and
+-- loading takes the newest that reads back whole. No file is created,
+-- renamed or deleted while the program runs: Server Utilities' backup lists
+-- the world folder first and fails on any file gone by the time it reads it.
+local saveCounts = {}
+
+local function readSaved(path)
+  local newest
+  for _, slot in ipairs({ path, path .. ".b" }) do
+    local f = io.open(slot, "r")
+    if f then
+      local content = f:read("*a")
+      f:close()
+      local ok, data = pcall(serialization.unserialize, content)
+      if ok and type(data) == "table" then
+        -- No count: written by the old single-file save.
+        if data.saveCount == nil then data = { saveCount = 0, value = data } end
+        if not newest or data.saveCount > newest.saveCount then newest = data end
+      end
+    end
+  end
+  return newest
+end
+
 local function saveTable(path, value)
-  local tmp = path .. ".tmp"
-  local f = io.open(tmp, "w")
+  if not saveCounts[path] then
+    local newest = readSaved(path)
+    saveCounts[path] = newest and newest.saveCount or 0
+  end
+  local n = saveCounts[path] + 1
+  saveCounts[path] = n
+  local f = io.open(n % 2 == 0 and path or path .. ".b", "w")
   if not f then return false end
-  f:write(serialization.serialize(value))
+  f:write(serialization.serialize({ saveCount = n, value = value }))
   f:close()
-  filesystem.remove(path)
-  filesystem.rename(tmp, path)
   return true
 end
 
 local function loadTable(path)
-  local f = io.open(path, "r")
-  if not f then return nil end
-  local content = f:read("*a")
-  f:close()
-  local ok, data = pcall(serialization.unserialize, content)
-  if ok and type(data) == "table" then return data end
+  local newest = readSaved(path)
+  if newest and type(newest.value) == "table" then return newest.value end
   return nil
 end
 
