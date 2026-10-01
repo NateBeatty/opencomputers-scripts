@@ -1162,7 +1162,6 @@ end
 local function buildTile(handle)
   local x0, z0, w, l = tiles.bounds(g, state.tile)
   local cells = w * l
-  local W, L = handle.header.width, handle.header.length
 
   if state.needStock then
     local lx, lz = tiles.cellPosition(state.p, state.i, w, l)
@@ -1181,7 +1180,9 @@ local function buildTile(handle)
 
   for layer = state.p, H - 1 do
     state.p = layer
-    local layerData = plan.layer(handle, layer)
+    -- Only the tile and a one-cell border (for neighbour checks): a whole
+    -- layer of a big plan does not fit in a robot's RAM.
+    local win = plan.window(handle, layer, x0 - 1, z0 - 1, w + 2, l + 2)
 
     -- Is there anything to place on this layer inside this tile? Most upper
     -- layers of a plan are air, and walking one costs a whole pass over the
@@ -1190,7 +1191,7 @@ local function buildTile(handle)
     local anyWork = false
     for z = z0, z0 + l - 1 do
       for x = x0, x0 + w - 1 do
-        local v = string.byte(layerData, x + z * W + 1)
+        local v = plan.windowCell(win, x, z)
         if v ~= plan.PALETTE_AIR and v ~= plan.PALETTE_SKIP then
           anyWork = true
           break
@@ -1209,16 +1210,12 @@ local function buildTile(handle)
         local n = 0
         for j = state.i, cells - 1 do
           local jx, jz = tiles.cellPosition(layer, j, w, l)
-          local entry = plan.paletteEntry(handle.palette,
-            string.byte(layerData, (x0 + jx) + (z0 + jz) * W + 1))
+          local entry = plan.paletteEntry(handle.palette, plan.windowCell(win, x0 + jx, z0 + jz))
           if entry and itemKey(entry.itemName, entry.damage) == key then n = n + 1 end
         end
         return n
       end
-      local function cellAt(cx, cz)
-        if cx < 0 or cz < 0 or cx >= W or cz >= L then return nil end
-        return string.byte(layerData, cx + cz * W + 1)
-      end
+      local function cellAt(cx, cz) return plan.windowCell(win, cx, cz) end
 
       for index = state.i, cells - 1 do
         state.i = index
@@ -1234,7 +1231,7 @@ local function buildTile(handle)
         -- the ender chest into that cell.
         restIfNeeded()
         keepGeneratorsFed()
-        processCell(string.byte(layerData, x + z * W + 1), handle.palette, x, layer, z, needFor,
+        processCell(plan.windowCell(win, x, z), handle.palette, x, layer, z, needFor,
           cellAt)
 
         saveState()

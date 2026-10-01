@@ -258,6 +258,69 @@ function plan.layer(handle, y)
   return decodeLayerBytes(data, handle.cellsPerLayer, y)
 end
 
+--- Decode only a rectangle of one layer from a streamed plan: x in
+--- [x0, x0 + w), z in [z0, z0 + l), clamped to the plan. The layer is read in
+--- small chunks and only the rectangle's cells are kept. plan.layer holds every
+--- run of a whole layer at once, and a varied 271x271 layer (~6000 runs) does
+--- not fit in a robot's RAM.
+-- @param handle from plan.open
+-- @param y 0-based layer index
+-- @return a window for plan.windowCell
+function plan.window(handle, y, x0, z0, w, l)
+  local h = handle.header
+  if y < 0 or y >= h.height then error("layer out of range: " .. y) end
+  local W = h.width
+  local wx0, wz0 = math.max(0, x0), math.max(0, z0)
+  local ww = math.max(0, math.min(W, x0 + w) - wx0)
+  local wl = math.max(0, math.min(h.length, z0 + l) - wz0)
+
+  local start = handle.layerOffsets[y + 1]
+  local finish = (y + 1 < h.height) and handle.layerOffsets[y + 2] or h.fileLength
+  handle.file:seek("set", start)
+  local remaining = finish - start
+
+  local rows, parts = {}, {}
+  local row, cell = 0, 0
+  local buf, p = "", 1
+  while row < wl do
+    -- A run is two varints of at most 5 bytes each.
+    if #buf - p + 1 < 10 and remaining > 0 then
+      local chunk = handle.file:read(math.min(4096, remaining))
+      if not chunk or #chunk == 0 then error("could not read layer " .. y) end
+      remaining = remaining - #chunk
+      buf = buf:sub(p) .. chunk
+      p = 1
+    end
+    if p > #buf then error(string.format("Layer %d: data ends before row %d", y, wz0 + row)) end
+    local runLen, rl = varint.decode(buf, p); p = p + rl
+    local paletteIdx, pl = varint.decode(buf, p); p = p + pl
+    if paletteIdx > 255 then
+      error(string.format("layer %d: palette index %d exceeds one byte", y, paletteIdx))
+    end
+    local runEnd = cell + runLen
+    -- A run can cover several rows of the window (long stretches of air).
+    while row < wl do
+      local s = (wz0 + row) * W + wx0
+      local e = s + ww
+      local a, b = math.max(cell, s), math.min(runEnd, e)
+      if a < b then parts[#parts + 1] = string.rep(string.char(paletteIdx), b - a) end
+      if runEnd < e then break end
+      rows[#rows + 1] = table.concat(parts)
+      parts = {}
+      row = row + 1
+    end
+    cell = runEnd
+  end
+  return { x0 = wx0, z0 = wz0, w = ww, l = wl, data = table.concat(rows) }
+end
+
+--- A cell's palette index from plan.window, or nil outside the window.
+function plan.windowCell(win, x, z)
+  local lx, lz = x - win.x0, z - win.z0
+  if lx < 0 or lz < 0 or lx >= win.w or lz >= win.l then return nil end
+  return string.byte(win.data, lx + lz * win.w + 1)
+end
+
 function plan.close(handle)
   if handle and handle.file then
     handle.file:close()

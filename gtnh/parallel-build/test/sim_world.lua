@@ -91,24 +91,56 @@ local function planCell(x, y, z)
   return 0
 end
 
-local layers = {}
+-- The layers are run-length encoded as in a .plan file and read through a
+-- fake file, so pbuild reads them with the real plan.window.
+local varint = require("varint")
+local body, layerOffsets = {}, {}
+local bodyStart = 100                      -- where layer data would start in a file
+local bodyLength = 0
 for y = 0, H - 1 do
-  local parts = {}
-  for z = 0, L - 1 do
-    for x = 0, W - 1 do parts[#parts + 1] = string.char(planCell(x, y, z)) end
+  layerOffsets[y + 1] = bodyStart + bodyLength
+  local runs = {}
+  local runValue, runLen = nil, 0
+  local function flush()
+    if runLen > 0 then varint.append(runs, runLen) varint.append(runs, runValue) end
   end
-  layers[y] = table.concat(parts)
+  for z = 0, L - 1 do
+    for x = 0, W - 1 do
+      local v = planCell(x, y, z)
+      if v == runValue then runLen = runLen + 1 else flush() runValue, runLen = v, 1 end
+    end
+  end
+  flush()
+  local data = table.concat(runs)
+  body[#body + 1] = data
+  bodyLength = bodyLength + #data
+end
+local planBytes = string.rep("\0", bodyStart) .. table.concat(body)
+
+local function planFile()
+  local pos = 0
+  return {
+    seek = function(_, _, offset) pos = offset return pos end,
+    read = function(_, n)
+      if pos >= #planBytes then return nil end
+      local s = planBytes:sub(pos + 1, pos + n)
+      pos = pos + #s
+      return s
+    end,
+    close = function() end,
+  }
 end
 
-local planHandle = {
-  name = "sim", palette = PALETTE, cellsPerLayer = W * L,
-  header = { width = W, height = H, length = L, planVersion = 1, crcStored = 42 },
-}
 local mockPlan = setmetatable({
-  open = function() return planHandle end,
+  open = function()
+    return {
+      name = "sim", palette = PALETTE, cellsPerLayer = W * L, layerOffsets = layerOffsets,
+      header = { width = W, height = H, length = L, planVersion = 1, crcStored = 42,
+        fileLength = bodyStart + bodyLength },
+      file = planFile(),
+    }
+  end,
   verify = function() return true end,
-  layer = function(_, y) return layers[y] end,
-  close = function() end,
 }, { __index = realPlan })
 
 -- ---------------------------------------------------------------------------

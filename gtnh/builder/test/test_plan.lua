@@ -131,5 +131,68 @@ test("CRC mismatch detected", function()
   assert(tostring(err):find("CRC"), "error should mention CRC")
 end)
 
+--- A streamed-plan handle over a plan held in memory (plan.open needs io).
+local function memoryHandle(raw)
+  local p = plan.decode(raw)
+  local pos = 0
+  local file = {
+    seek = function(_, _, offset) pos = offset return pos end,
+    read = function(_, n)
+      if pos >= #raw then return nil end
+      local s = raw:sub(pos + 1, pos + n)
+      pos = pos + #s
+      return s
+    end,
+  }
+  return {
+    file = file, header = p.header, palette = p.palette, layerOffsets = p.layerOffsets,
+    cellsPerLayer = p.header.width * p.header.length,
+  }, p
+end
+
+--- Every cell of the window, and one cell around it, matches the full layer.
+local function checkWindow(handle, p, y, x0, z0, w, l)
+  local W, L = p.header.width, p.header.length
+  local win = plan.window(handle, y, x0, z0, w, l)
+  for z = z0 - 1, z0 + l do
+    for x = x0 - 1, x0 + w do
+      local inside = x >= x0 and x < x0 + w and z >= z0 and z < z0 + l
+        and x >= 0 and z >= 0 and x < W and z < L
+      local want = inside and plan.cellAt(p.layers[y + 1], x, z, W) or nil
+      local got = plan.windowCell(win, x, z)
+      if got ~= want then
+        error(string.format("layer %d window (%d,%d %dx%d): cell %d,%d is %s, expected %s",
+          y, x0, z0, w, l, x, z, tostring(got), tostring(want)))
+      end
+    end
+  end
+end
+
+test("window matches the full layer on tree5.plan", function()
+  local handle, p = memoryHandle(readGoldenFile("tree5.plan"))
+  local W, L = p.header.width, p.header.length
+  for y = 0, p.header.height - 1 do
+    checkWindow(handle, p, y, 0, 0, W, L)             -- the whole layer
+    checkWindow(handle, p, y, -1, -1, 6, 5)           -- clipped at the corner
+    checkWindow(handle, p, y, 7, 9, 8, 8)             -- inside
+    checkWindow(handle, p, y, W - 4, L - 3, 6, 6)     -- clipped at the far edge
+    checkWindow(handle, p, y, 3, 3, 1, 1)             -- one cell
+  end
+end)
+
+test("window matches the full layer on layers23.plan, every tile", function()
+  local raw = readFile("../gtnh/plans/layers23.plan") or readFile("gtnh/plans/layers23.plan")
+  if not raw then error("layers23.plan not found") end
+  local handle, p = memoryHandle(raw)
+  local W, L = p.header.width, p.header.length
+  for _, y in ipairs({ 0, 1, 10, p.header.height - 1 }) do
+    for tz = 0, L - 1, 16 do
+      for tx = 0, W - 1, 16 do
+        checkWindow(handle, p, y, tx - 1, tz - 1, 18, 18)
+      end
+    end
+  end
+end)
+
 print(string.format("\n=== %d passed, %d failed ===", passed, failed))
 os.exit(failed > 0 and 1 or 0)
