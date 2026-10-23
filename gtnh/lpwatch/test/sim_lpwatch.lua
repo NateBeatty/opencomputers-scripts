@@ -33,6 +33,16 @@ end
 -- Simulation
 -- ---------------------------------------------------------------------------
 
+-- The simulated items: name -> { item ID, data, display name from LP }.
+ITEMS = {
+  iron = { 5, 0, "Iron" },
+  copper = { 5, 1, "Copper" },
+  gold = { 300, 7, "Gold" },
+  tin = { 12, 0, "Tin" },
+  odd = { 4000, -1, "item.oddThing.name" },  -- untranslated on the server
+}
+for i = 1, 10 do ITEMS["bulk" .. i] = { 900, i, "Bulk " .. i } end
+
 --- A fresh world: in-memory files and a clock (seconds of real time).
 local function newWorld()
   return { files = {}, time = 1700000000, screen = "" }
@@ -40,34 +50,61 @@ end
 
 --- Run lpwatch once in `world` for `cycles` snapshots, then press q.
 --- `stockAt(n)` returns { [name] = count } for the n-th snapshot of this run
---- (1-based), or the string "error" to make getAvailableItems fail.
+--- (1-based), or the string "error" to make the listing fail.
 local function run(world, cycles, stockAt, opts)
   opts = opts or {}
   local files = world.files
   local snapshots = 0
 
-  local function makePair(name, count)
-    local id = {
-      getIdName = function() return "mod:" .. name end,
-      getId = function() return 1 end,
-      getData = function() return 0 end,
-      getName = function() return name:gsub("^%l", string.upper) end,
-    }
-    return { getValue1 = function() return id end, getValue2 = function() return count end }
-  end
-
+  -- PipeItemsRequestLogistics.getAvailableItemsPage: a listing sorted by
+  -- (id, data), taken when afterId < 0 and paged from after the cursor.
+  local listing = {}
+  local function key(id, data) return id * 4294967296.0 + data % 4294967296.0 end
   local pipe = {
-    getAvailableItems = function()
-      snapshots = snapshots + 1
-      local stock = stockAt(snapshots)
-      if stock == "error" then error("logisticspipes.security.PermissionException", 0) end
-      local list, names = {}, {}
-      for name in pairs(stock) do names[#names + 1] = name end
-      table.sort(names)
-      for i, name in ipairs(names) do list[i] = makePair(name, stock[name]) end
-      return list
+    getAvailableItemsPage = function(afterId, afterData, count)
+      world.pageCalls = (world.pageCalls or 0) + 1
+      if afterId < 0 then
+        snapshots = snapshots + 1
+        local stock = stockAt(snapshots)
+        if stock == "error" then error("logisticspipes.security.PermissionException", 0) end
+        listing = {}
+        for name, n in pairs(stock) do
+          local item = assert(ITEMS[name], "unknown item " .. name)
+          listing[#listing + 1] = { id = item[1], data = item[2], count = n }
+        end
+        table.sort(listing, function(a, b) return key(a.id, a.data) < key(b.id, b.data) end)
+      end
+      local lines = {}
+      for _, e in ipairs(listing) do
+        if #lines >= count then break end
+        if afterId < 0 or key(e.id, e.data) > key(afterId, afterData) then
+          lines[#lines + 1] = string.format("%d %d %d\n", e.id, e.data, e.count)
+        end
+      end
+      return table.concat(lines)
+    end,
+    getLP = function()
+      return { getItemIdentifierBuilder = function()
+        local b = {}
+        return {
+          setItemID = function(id) assert(math.type(id) == "integer") b.id = id end,
+          setItemData = function(data) assert(math.type(data) == "integer") b.data = data end,
+          build = function()
+            for name, item in pairs(ITEMS) do
+              if item[1] == b.id and item[2] == b.data then
+                return {
+                  getName = function() return item[3] end,
+                  getIdName = function() return "mod:" .. name end,
+                }
+              end
+            end
+            error("Not a valid ItemIdentifier")
+          end,
+        }
+      end }
     end,
   }
+  if opts.oldLP then pipe = { getAvailableItems = function() return {} end } end
 
   package.loaded.component = {
     list = function(kind)
@@ -264,6 +301,34 @@ end)
 test("permission errors explain the Security Station", function()
   local w = run(newWorld(), 1, function() return "error" end)
   assert_has(w.screen, "Security Station")
+end)
+
+test("stock is read across several pages", function()
+  local function stock(n)
+    local s = {}
+    for i = 1, 10 do s["bulk" .. i] = 1000 - (n - 1) * i end
+    return s
+  end
+  local w = run(newWorld(), 2, stock, { config = { pageSize = 3 } })
+  local r = report(w)
+  assert_has(r, "(10 item types, 10 dropped)")
+  assert_has(r, "Bulk 10")
+  assert(r:find("Bulk 10", 1, true) < r:find("Bulk 9", 1, true), "order: " .. r)
+  -- 10 items in pages of 3: 4 calls per snapshot, the last one short.
+  assert_eq(w.pageCalls, 8, "page calls")
+end)
+
+test("untranslated names fall back to the registry name", function()
+  local stocks = { { odd = 10, iron = 5 }, { odd = 4, iron = 5 } }
+  local w = run(newWorld(), 2, function(n) return stocks[n] end)
+  assert_has(report(w), "mod:odd@-1")
+  -- Names are saved, keyed by the numeric item key.
+  assert_has(w.files["/home/lpwatch/names"], "\tmod:odd@-1\n")
+end)
+
+test("an LP build without getAvailableItemsPage says so", function()
+  local w = run(newWorld(), 0, function() return {} end, { oldLP = true })
+  assert_has(w.screen, "no getAvailableItemsPage")
 end)
 
 print(string.format("%d passed, %d failed", passed, failed))

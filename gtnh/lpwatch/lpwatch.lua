@@ -3,17 +3,23 @@
 --
 -- Usage: lpwatch [--reset]
 --
--- Every 5 minutes the program reads every item the network can provide
--- (Request Pipe getAvailableItems) and saves what changed since the last
--- snapshot. The screen shows the biggest drops between the oldest snapshot
--- in the window (24 hours, or since the program started if that is shorter)
--- and the newest one. The same report is written to /home/lpwatch/report.txt.
--- Press q to quit. History survives restarts; --reset starts it again from
--- the next snapshot.
+-- Every 5 minutes the program reads every item the network can provide and
+-- saves what changed since the last snapshot. The screen shows the biggest
+-- drops between the oldest snapshot in the window (24 hours, or since the
+-- program started if that is shorter) and the newest one. The same report is
+-- written to /home/lpwatch/report.txt. Press q to quit. History survives
+-- restarts; --reset starts it again from the next snapshot.
 --
--- Needs: a computer touching a Logistics Request Pipe, or connected to one by
--- OC cable. If the LP network has a Security Station, turn on computer access
--- in it, or every call fails with a permission error.
+-- Needs: a computer touching a Logistics Request Table or Request Pipe, or
+-- connected to one by OC cable, and an LP build with getAvailableItemsPage
+-- (the NateBeatty/LogisticsPipes-GTNH fork). If the LP network has a Security
+-- Station, turn on computer access in it, or every call fails.
+--
+-- Memory: LP's getAvailableItems returns one OC object per item type, which
+-- fills a computer on a large network. getAvailableItemsPage returns plain
+-- "id data count" lines a page at a time instead, and each snapshot is kept as
+-- two sorted arrays: keys (item ID << 32 | data) and counts. Display names are
+-- looked up only for the items the report shows.
 --
 -- Storage: the counts at the start of the window are kept in base.a/base.b
 -- (written in turn, the newer complete one wins), and each snapshot's changes
@@ -38,9 +44,8 @@ local config = {
   window = 24 * 3600,     -- seconds the report looks back
   dataDir = "/home/lpwatch",
   pipeAddress = nil,      -- request pipe component address (prefix ok); nil = find one
+  pageSize = 2000,        -- items per getAvailableItemsPage call
   reportFileLines = 100,  -- drops listed in report.txt
-  yieldEvery = 200,       -- items read between yields (OC kills programs that
-                          -- run 5 s without yielding)
 }
 
 do -- optional /etc/lpwatch.cfg overrides
@@ -62,16 +67,29 @@ local baseFiles = { path("base.a"), path("base.b") }
 local reportFile = path("report.txt")
 
 -- ---------------------------------------------------------------------------
--- State
+-- State. A stock list is two arrays sorted by key: keys[i] and counts[i].
+-- Lists are never changed in place, so they can be shared.
 -- ---------------------------------------------------------------------------
 
 -- base: counts at the start of the window, as of snapshot `seq` taken at `time`.
-local base = { stamp = 0, seq = 0, time = 0, counts = {} }
-local current = {}     -- counts at the newest snapshot
+local base = { stamp = 0, seq = 0, time = 0, keys = {}, counts = {} }
+local current = { keys = {}, counts = {} }  -- the newest snapshot
 local currentTime = nil
 local nextSeq = 1
 local ring = {}        -- unfolded slots, oldest first: { seq, time, file }
-local names = {}       -- key -> display name
+local names = {}       -- key -> display name, for items the report has shown
+
+-- Keys are id * 2^32 + data (data taken mod 2^32), the same order as LP's
+-- listing. They stay below 2^53, so they are exact as floats too and need no
+-- 64-bit integers.
+local TWO32 = 4294967296.0
+local function makeKey(id, data) return id * TWO32 + data % TWO32 end
+local function itemId(key) return math.tointeger(math.floor(key / TWO32)) end
+local function itemData(key)
+  local data = key % TWO32
+  if data >= 2147483648 then data = data - TWO32 end
+  return math.tointeger(data)
+end
 
 -- ---------------------------------------------------------------------------
 -- Clock: OC has no wall clock, but files in /tmp get real modification times.
@@ -85,101 +103,116 @@ local function now()
 end
 
 -- ---------------------------------------------------------------------------
--- Files
+-- Files: a header line, "key count" lines in key order, then "end".
 -- ---------------------------------------------------------------------------
 
---- Write `header`, then "key\tcount" for each key of `keys` (count from
---- `counts`, 0 when absent), then "end". Line by line: one big string can
---- fail to allocate on a full computer.
-local function writeCounts(file, header, keys, counts)
+local function writeList(file, header, list)
   local f = assert(io.open(file, "w"))
   f:write(header, "\n")
-  for _, k in ipairs(keys) do
-    f:write(k, "\t", tostring(counts[k] or 0), "\n")
-  end
+  local keys, counts = list.keys, list.counts
+  for i = 1, #keys do f:write(string.format("%.0f %.0f\n", keys[i], counts[i])) end
   f:write("end\n")
   f:close()
 end
 
---- Read a file written by writeCounts. Returns the header fields and a
---- key -> count table, or nil if the file is missing or was cut short.
-local function readCounts(file, wantCounts)
+--- Read a file written by writeList (or a slot). Returns the header fields
+--- and the list, or nil if the file is missing or was cut short.
+local function readList(file, wantList)
   local f = io.open(file, "r")
   if not f then return nil end
-  local header, counts, complete = nil, {}, false
+  local header, keys, counts, n, complete = nil, {}, {}, 0, false
   for line in f:lines() do
     if not header then
       header = line
-      if not wantCounts then break end
+      if not wantList then break end
     elseif line == "end" then
       complete = true
       break
     else
-      local k, v = line:match("^(.-)\t(%d+)$")
-      if k then counts[k] = tonumber(v) end
+      local k, v = line:match("^(%d+) (%d+)$")
+      if k then
+        n = n + 1
+        keys[n], counts[n] = tonumber(k), tonumber(v)
+      end
     end
   end
   f:close()
-  if not header or (wantCounts and not complete) then return nil end
+  if not header or (wantList and not complete) then return nil end
   local fields = {}
   for w in header:gmatch("%S+") do fields[#fields + 1] = w end
-  return fields, counts
-end
-
-local function sortedKeys(t)
-  local keys = {}
-  for k in pairs(t) do keys[#keys + 1] = k end
-  table.sort(keys)
-  return keys
+  return fields, { keys = keys, counts = counts }
 end
 
 local function saveBase()
   base.stamp = base.stamp + 1
-  local nonZero = {}
-  for k, v in pairs(base.counts) do if v > 0 then nonZero[#nonZero + 1] = k end end
-  table.sort(nonZero)
-  writeCounts(baseFiles[base.stamp % 2 + 1],
-    string.format("lpwatch-base %d %d %d", base.stamp, base.seq, base.time),
-    nonZero, base.counts)
+  writeList(baseFiles[base.stamp % 2 + 1],
+    string.format("lpwatch-base2 %d %d %d", base.stamp, base.seq, base.time), base)
 end
 
 local function loadBase()
   local best
   for _, file in ipairs(baseFiles) do
-    local fields, counts = readCounts(file, true)
-    if fields and fields[1] == "lpwatch-base" then
+    local fields, list = readList(file, true)
+    if fields and fields[1] == "lpwatch-base2" then
       local b = { stamp = tonumber(fields[2]), seq = tonumber(fields[3]),
-                  time = tonumber(fields[4]), counts = counts }
+                  time = tonumber(fields[4]), keys = list.keys, counts = list.counts }
       if not best or b.stamp > best.stamp then best = b end
     end
   end
   return best
 end
 
-local function applyCounts(target, changes)
-  for k, v in pairs(changes) do
-    if v > 0 then target[k] = v else target[k] = nil end
-  end
-end
-
 local function loadNames()
   local f = io.open(path("names"), "r")
   if not f then return end
   for line in f:lines() do
-    local k, name = line:match("^(.-)\t(.*)$")
-    if k then names[k] = name end
+    local k, name = line:match("^(%d+)\t(.*)$")
+    if k then names[tonumber(k)] = name end
   end
   f:close()
 end
 
-local function saveNewNames(newNames)
-  if next(newNames) == nil then return end
-  local f = assert(io.open(path("names"), "a"))
-  for _, k in ipairs(sortedKeys(newNames)) do
-    f:write(k, "\t", (newNames[k]:gsub("[\t\n\r]", " ")), "\n")
-    names[k] = newNames[k]
+-- ---------------------------------------------------------------------------
+-- Stock lists
+-- ---------------------------------------------------------------------------
+
+--- `list` with `changes` applied (a list whose count 0 means "gone").
+local function applyChanges(list, changes)
+  local k, c, xk, xc = list.keys, list.counts, changes.keys, changes.counts
+  local nk, nc, n, i, j = {}, {}, 0, 1, 1
+  while k[i] or xk[j] do
+    if xk[j] == nil or (k[i] ~= nil and k[i] < xk[j]) then
+      n = n + 1
+      nk[n], nc[n] = k[i], c[i]
+      i = i + 1
+    else
+      if k[i] == xk[j] then i = i + 1 end
+      if xc[j] > 0 then
+        n = n + 1
+        nk[n], nc[n] = xk[j], xc[j]
+      end
+      j = j + 1
+    end
   end
-  f:close()
+  return { keys = nk, counts = nc }
+end
+
+--- Write the lines that turn `old` into `new` to the open file `f`.
+local function writeChanges(f, old, new)
+  local ok, oc, nk, nc = old.keys, old.counts, new.keys, new.counts
+  local i, j = 1, 1
+  while ok[i] or nk[j] do
+    if nk[j] == nil or (ok[i] ~= nil and ok[i] < nk[j]) then
+      f:write(string.format("%.0f 0\n", ok[i]))
+      i = i + 1
+    elseif ok[i] == nil or nk[j] < ok[i] then
+      f:write(string.format("%.0f %.0f\n", nk[j], nc[j]))
+      j = j + 1
+    else
+      if oc[i] ~= nc[j] then f:write(string.format("%.0f %.0f\n", nk[j], nc[j])) end
+      i, j = i + 1, j + 1
+    end
+  end
 end
 
 -- ---------------------------------------------------------------------------
@@ -191,10 +224,13 @@ local function fold(n)
   if n <= 0 then return end
   for _ = 1, n do
     local slot = table.remove(ring, 1)
-    local _, changes = readCounts(slot.file, true)
+    local _, changes = readList(slot.file, true)
     -- A slot that was cut short is skipped; the next snapshot after a
     -- restart re-lists every item that differs, so the error stays small.
-    if changes then applyCounts(base.counts, changes) end
+    if changes then
+      local folded = applyChanges(base, changes)
+      base.keys, base.counts = folded.keys, folded.counts
+    end
     base.seq, base.time = slot.seq, slot.time
   end
   saveBase()
@@ -217,21 +253,20 @@ local function loadHistory()
   local slots = {}
   for name in filesystem.list(config.dataDir) do
     if name:match("^slot%d+$") then
-      local fields = readCounts(path(name), false)
-      if fields and fields[1] == "lpwatch-slot" then
+      local fields = readList(path(name), false)
+      if fields and fields[1] == "lpwatch-slot2" then
         slots[#slots + 1] = { seq = tonumber(fields[2]), time = tonumber(fields[3]), file = path(name) }
       end
     end
   end
   table.sort(slots, function(a, b) return a.seq < b.seq end)
-  for k, v in pairs(base.counts) do current[k] = v end
-  currentTime = base.time
+  current, currentTime = { keys = base.keys, counts = base.counts }, base.time
   nextSeq = base.seq + 1
   for _, slot in ipairs(slots) do
     if slot.seq > base.seq then
-      local _, changes = readCounts(slot.file, true)
+      local _, changes = readList(slot.file, true)
       if changes then
-        applyCounts(current, changes)
+        current = applyChanges(current, changes)
         ring[#ring + 1] = slot
         currentTime = slot.time
       end
@@ -248,15 +283,11 @@ local function record(snap, t)
   for i, slot in ipairs(ring) do
     if slot.file == file then fold(i) break end
   end
-  local changed = {}
-  for k, v in pairs(snap) do
-    if current[k] ~= v then changed[#changed + 1] = k end
-  end
-  for k in pairs(current) do
-    if snap[k] == nil then changed[#changed + 1] = k end
-  end
-  table.sort(changed)
-  writeCounts(file, string.format("lpwatch-slot %d %d", nextSeq, t), changed, snap)
+  local f = assert(io.open(file, "w"))
+  f:write(string.format("lpwatch-slot2 %d %d\n", nextSeq, t))
+  writeChanges(f, current, snap)
+  f:write("end\n")
+  f:close()
   ring[#ring + 1] = { seq = nextSeq, time = t, file = file }
   nextSeq = nextSeq + 1
   current, currentTime = snap, t
@@ -265,8 +296,7 @@ end
 --- Start the window afresh at snapshot `snap` taken at `t`.
 local function reset(snap, t)
   ring = {}
-  base.counts, base.seq, base.time = {}, nextSeq - 1, t
-  for k, v in pairs(snap) do base.counts[k] = v end
+  base.keys, base.counts, base.seq, base.time = snap.keys, snap.counts, nextSeq - 1, t
   saveBase()
   current, currentTime = snap, t
 end
@@ -282,29 +312,76 @@ local function findPipe()
   else
     for address in component.list("logisticspipe") do addresses[#addresses + 1] = address end
   end
+  local old
   for _, address in ipairs(addresses) do
     local ok, pipe = pcall(component.invoke, address, "getPipe")
-    if ok and pipe and pipe.getAvailableItems then return pipe end
+    if ok and pipe then
+      if pipe.getAvailableItemsPage then return pipe end
+      if pipe.getAvailableItems then old = true end
+    end
   end
-  error("no Logistics Request Pipe found (the computer, or an OC cable from it, must touch one)", 0)
+  if old then
+    error("this LP build has no getAvailableItemsPage; install the LP fork with it", 0)
+  end
+  error("no Logistics Request Table or Pipe found (the computer, or an OC cable from it, must touch one)", 0)
 end
 
---- Read the network's stock: key -> count, plus display names not seen before.
-local function snapshot()
-  local items = findPipe().getAvailableItems()
-  local snap, newNames, n = {}, {}, 0
-  for _, pair in pairs(items) do
-    local id, count = pair.getValue1(), pair.getValue2()
-    if id and count and count > 0 then
-      -- Items that differ only by NBT are added together.
-      local key = (id.getIdName() or ("id" .. id.getId())) .. "@" .. id.getData()
-      snap[key] = (snap[key] or 0) + math.floor(count)
-      if not names[key] and not newNames[key] then newNames[key] = id.getName() or key end
+--- Read the network's stock, a page at a time.
+local function snapshot(pipe)
+  local keys, counts, n = {}, {}, 0
+  local afterId, afterData = -1, 0
+  repeat
+    local page = pipe.getAvailableItemsPage(afterId, afterData, config.pageSize)
+    local lines = 0
+    for id, data, count in page:gmatch("(%d+) (%-?%d+) (%d+)\n") do
+      lines = lines + 1
+      id, data, count = tonumber(id), tonumber(data), tonumber(count)
+      afterId, afterData = id, data
+      if count > 0 then
+        local key = makeKey(id, data)
+        if n > 0 and keys[n] == key then
+          counts[n] = counts[n] + count
+        elseif n == 0 or keys[n] < key then
+          n = n + 1
+          keys[n], counts[n] = key, count
+        end
+      end
     end
-    n = n + 1
-    if n % config.yieldEvery == 0 then os.sleep(0) end
+    page = nil
+  until lines < config.pageSize
+  return { keys = keys, counts = counts }
+end
+
+--- Look up display names for `keys` that have none yet, and save them.
+local function resolveNames(pipe, keys)
+  local found = {}
+  for _, key in ipairs(keys) do
+    if not names[key] then
+      local ok, name = pcall(function()
+        local builder = pipe.getLP().getItemIdentifierBuilder()
+        builder.setItemID(itemId(key))
+        builder.setItemData(itemData(key))
+        local ident = builder.build()
+        local name = ident.getName()
+        -- Fall back to the registry name when the server could not translate it.
+        if not name or name == "" or name:match("^[%w_.:]+%.name$") then
+          name = ident.getIdName() .. "@" .. itemData(key)
+        end
+        return name
+      end)
+      if not ok then name = "item " .. itemId(key) .. "@" .. itemData(key) end
+      name = name:gsub("\194\167.", ""):gsub("[\t\n\r]", " ")  -- drop § colour codes
+      names[key] = name
+      found[#found + 1] = key
+    end
   end
-  return snap, newNames
+  if #found > 0 then
+    local f = io.open(path("names"), "a")
+    if f then
+      for _, key in ipairs(found) do f:write(string.format("%.0f\t%s\n", key, names[key])) end
+      f:close()
+    end
+  end
 end
 
 -- ---------------------------------------------------------------------------
@@ -319,7 +396,7 @@ end
 
 local function duration(seconds)
   seconds = math.max(0, math.floor(seconds))
-  local h, m = seconds // 3600, seconds % 3600 // 60
+  local h, m = math.floor(seconds / 3600), math.floor(seconds % 3600 / 60)
   if h > 0 then return string.format("%dh %02dm", h, m) end
   return string.format("%dm", m)
 end
@@ -329,55 +406,76 @@ local function fit(s, width)
   return unicode.sub(s, 1, width - 3) .. "..."
 end
 
+--- The `limit` biggest drops from base to current, biggest first, and how
+--- many items dropped in all.
+local function biggestDrops(limit)
+  local top, dropped = {}, 0
+  local bk, bc, ck, cc = base.keys, base.counts, current.keys, current.counts
+  local j = 1
+  for i = 1, #bk do
+    local key = bk[i]
+    while ck[j] and ck[j] < key do j = j + 1 end
+    local now = (ck[j] == key) and cc[j] or 0
+    local change = now - bc[i]
+    if change < 0 then
+      dropped = dropped + 1
+      if #top < limit or change < top[#top].change then
+        local pos = #top + 1
+        while pos > 1 and (top[pos - 1].change > change) do pos = pos - 1 end
+        table.insert(top, pos, { key = key, now = now, change = change })
+        if #top > limit then top[#top] = nil end
+      end
+    end
+  end
+  return top, dropped
+end
+
 --- The report as a list of lines `width` wide with at most `maxDrops` drops.
-local function report(width, maxDrops)
+local function report(top, dropped, width, maxDrops)
   local span = (currentTime or base.time) - base.time
   local hours = math.max(span, config.interval) / 3600
-  local drops = {}
-  for k, was in pairs(base.counts) do
-    local change = (current[k] or 0) - was
-    if change < 0 then drops[#drops + 1] = { key = k, now = current[k] or 0, change = change } end
-  end
-  table.sort(drops, function(a, b)
-    if a.change ~= b.change then return a.change < b.change end
-    return a.key < b.key
-  end)
-
-  local types = 0
-  for _ in pairs(current) do types = types + 1 end
   local lines = {
     fit(string.format("Biggest drops over %s (%d item types, %d dropped)",
-      span > 0 and duration(span) or "no time yet", types, #drops), width),
+      span > 0 and duration(span) or "no time yet", #current.keys, dropped), width),
     fit(string.format("%12s %10s %13s  %s", "Change", "Per hour", "Now", "Item"), width),
   }
-  for i = 1, math.min(#drops, maxDrops) do
-    local d = drops[i]
-    local name = (names[d.key] or d.key):gsub("\194\167.", "")  -- drop § colour codes
+  for i = 1, math.min(#top, maxDrops) do
+    local d = top[i]
+    local name = names[d.key] or ("item " .. itemId(d.key) .. "@" .. itemData(d.key))
     if d.now == 0 then name = name .. " (gone)" end
     lines[#lines + 1] = fit(string.format("%12s %10s %13s  %s",
       commas(d.change), commas(d.change / hours), commas(d.now), name), width)
   end
-  if #drops == 0 then
+  if #top == 0 then
     lines[#lines + 1] = span > 0 and "Nothing has dropped." or "Waiting for the second snapshot."
   end
   return lines
 end
 
-local function writeReport()
+local function screenSize()
+  if component.isAvailable("gpu") then return component.gpu.getResolution() end
+  return 80, 25
+end
+
+local function writeReport(top, dropped)
   local f = io.open(reportFile, "w")
   if not f then return end
-  for _, line in ipairs(report(200, config.reportFileLines)) do f:write(line, "\n") end
+  for _, line in ipairs(report(top, dropped, 200, config.reportFileLines)) do f:write(line, "\n") end
   f:close()
 end
 
-local function draw(status)
-  local width, height = 80, 25
-  if component.isAvailable("gpu") then width, height = component.gpu.getResolution() end
+local function draw(top, dropped, status)
+  local width, height = screenSize()
   term.clear()
   -- Title, status, column headings, then the drops. The bottom row stays
   -- empty: drawing on it came out garbled in game.
-  local lines = report(width - 1, height - 4)
-  table.insert(lines, 2, fit(status, width - 1))
+  -- A long status (an error) wraps onto up to three lines.
+  local statusLines, w = {}, width - 1
+  for i = 1, math.min(3, math.ceil(unicode.wlen(status) / w)) do
+    statusLines[i] = unicode.sub(status, (i - 1) * w + 1, i * w)
+  end
+  local lines = report(top, dropped, w, height - 3 - #statusLines)
+  for i, line in ipairs(statusLines) do table.insert(lines, 1 + i, line) end
   for _, line in ipairs(lines) do term.write(line .. "\n") end
 end
 
@@ -395,34 +493,40 @@ for _, a in ipairs(args) do
 end
 
 local haveHistory = loadHistory()
-local status
+local status, top, dropped = "Starting.", {}, 0
 
 local function step()
-  local ok, snap, newNames = pcall(snapshot)
+  local ok, err = pcall(function()
+    local pipe = findPipe()
+    local snap = snapshot(pipe)
+    local t = now()
+    if not haveHistory or resetRequested then
+      reset(snap, t)
+      haveHistory, resetRequested = true, false
+    else
+      record(snap, t)
+      foldOld(t)
+    end
+    local _, height = screenSize()
+    top, dropped = biggestDrops(math.max(height - 4, config.reportFileLines))
+    local shown = {}
+    for i, d in ipairs(top) do shown[i] = d.key end
+    resolveNames(pipe, shown)
+    writeReport(top, dropped)
+    status = string.format("Updated %s (server time), next in %s. q quits.", os.date("%H:%M", t), duration(config.interval))
+  end)
   if not ok then
-    if tostring(snap):find("ermission") then
+    if tostring(err):find("ermission") then
       status = "LP denied access: turn on computer access in the Security Station."
     else
-      status = "Read failed: " .. tostring(snap)
+      status = "Read failed: " .. tostring(err)
     end
-    return
   end
-  local t = now()
-  saveNewNames(newNames)
-  if not haveHistory or resetRequested then
-    reset(snap, t)
-    haveHistory, resetRequested = true, false
-  else
-    record(snap, t)
-    foldOld(t)
-  end
-  writeReport()
-  status = string.format("Updated %s (server time), next in %s. q quits.", os.date("%H:%M", t), duration(config.interval))
 end
 
 while true do
   step()
-  draw(status)
+  draw(top, dropped, status)
   local wakeAt = computer.uptime() + config.interval
   repeat
     local ev, _, char = event.pull(math.max(0, wakeAt - computer.uptime()), "key_down")
