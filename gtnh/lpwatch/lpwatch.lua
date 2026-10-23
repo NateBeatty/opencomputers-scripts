@@ -326,7 +326,7 @@ end
 
 local function fit(s, width)
   if unicode.wlen(s) <= width then return s end
-  return unicode.sub(s, 1, width - 1) .. "…"
+  return unicode.sub(s, 1, width - 3) .. "..."
 end
 
 --- The report as a list of lines `width` wide with at most `maxDrops` drops.
@@ -352,7 +352,7 @@ local function report(width, maxDrops)
   }
   for i = 1, math.min(#drops, maxDrops) do
     local d = drops[i]
-    local name = names[d.key] or d.key
+    local name = (names[d.key] or d.key):gsub("\194\167.", "")  -- drop § colour codes
     if d.now == 0 then name = name .. " (gone)" end
     lines[#lines + 1] = fit(string.format("%12s %10s %13s  %s",
       commas(d.change), commas(d.change / hours), commas(d.now), name), width)
@@ -374,10 +374,11 @@ local function draw(status)
   local width, height = 80, 25
   if component.isAvailable("gpu") then width, height = component.gpu.getResolution() end
   term.clear()
+  -- Title, status, column headings, then the drops. The bottom row stays
+  -- empty: drawing on it came out garbled in game.
   local lines = report(width - 1, height - 4)
+  table.insert(lines, 2, fit(status, width - 1))
   for _, line in ipairs(lines) do term.write(line .. "\n") end
-  term.setCursor(1, height)
-  term.write(fit(status, width - 1))
 end
 
 -- ---------------------------------------------------------------------------
