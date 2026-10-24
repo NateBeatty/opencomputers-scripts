@@ -1,12 +1,13 @@
 -- lpwatch.lua — Watch the stock of a Logistics Pipes network and show which
--- items dropped the most over the last 24 hours.
+-- items dropped and gained the most over the last 24 hours.
 --
 -- Usage: lpwatch [--reset]
 --
 -- Every 5 minutes the program reads every item the network can provide and
 -- saves what changed since the last snapshot. The screen shows the biggest
--- drops between the oldest snapshot in the window (24 hours, or since the
--- program started if that is shorter) and the newest one. The same report is
+-- drops (left) and gains (right) between the oldest snapshot in the window
+-- (24 hours, or since the program started if that is shorter) and the newest
+-- one. Items new since then count as gains. The same report is
 -- written to /home/lpwatch/report.txt. Press q to quit. History survives
 -- restarts; --reset starts it again from the next snapshot.
 --
@@ -406,50 +407,89 @@ local function fit(s, width)
   return unicode.sub(s, 1, width - 3) .. "..."
 end
 
---- The `limit` biggest drops from base to current, biggest first, and how
---- many items dropped in all.
-local function biggestDrops(limit)
-  local top, dropped = {}, 0
-  local bk, bc, ck, cc = base.keys, base.counts, current.keys, current.counts
-  local j = 1
-  for i = 1, #bk do
-    local key = bk[i]
-    while ck[j] and ck[j] < key do j = j + 1 end
-    local now = (ck[j] == key) and cc[j] or 0
-    local change = now - bc[i]
-    if change < 0 then
-      dropped = dropped + 1
-      if #top < limit or change < top[#top].change then
-        local pos = #top + 1
-        while pos > 1 and (top[pos - 1].change > change) do pos = pos - 1 end
-        table.insert(top, pos, { key = key, now = now, change = change })
-        if #top > limit then top[#top] = nil end
-      end
-    end
-  end
-  return top, dropped
+local function signed(n) return (n > 0 and "+" or "") .. commas(n) end
+
+--- Add `entry` to `top` (biggest change first) if it is among the `limit`
+--- biggest. Ties keep key order.
+local function keepTop(top, limit, entry)
+  local size = math.abs(entry.change)
+  if #top >= limit and size <= math.abs(top[#top].change) then return end
+  local pos = #top + 1
+  while pos > 1 and math.abs(top[pos - 1].change) < size do pos = pos - 1 end
+  table.insert(top, pos, entry)
+  if #top > limit then top[#top] = nil end
 end
 
---- The report as a list of lines `width` wide with at most `maxDrops` drops.
-local function report(top, dropped, width, maxDrops)
-  local span = (currentTime or base.time) - base.time
-  local hours = math.max(span, config.interval) / 3600
-  local lines = {
-    fit(string.format("Biggest drops over %s (%d item types, %d dropped)",
-      span > 0 and duration(span) or "no time yet", #current.keys, dropped), width),
-    fit(string.format("%12s %10s %13s  %s", "Change", "Per hour", "Now", "Item"), width),
-  }
-  for i = 1, math.min(#top, maxDrops) do
-    local d = top[i]
+--- The `limit` biggest drops and gains from base to current, and how many
+--- items dropped and gained in all. Items new since base count as gains.
+local function biggestChanges(limit)
+  local result = { drops = {}, gains = {}, dropped = 0, gained = 0 }
+  local bk, bc, ck, cc = base.keys, base.counts, current.keys, current.counts
+  local i, j = 1, 1
+  while bk[i] or ck[j] do
+    local key, was, now
+    if ck[j] == nil or (bk[i] ~= nil and bk[i] < ck[j]) then
+      key, was, now = bk[i], bc[i], 0
+      i = i + 1
+    elseif bk[i] == nil or ck[j] < bk[i] then
+      key, was, now = ck[j], 0, cc[j]
+      j = j + 1
+    else
+      key, was, now = bk[i], bc[i], cc[j]
+      i, j = i + 1, j + 1
+    end
+    local change = now - was
+    if change < 0 then
+      result.dropped = result.dropped + 1
+      keepTop(result.drops, limit, { key = key, now = now, change = change })
+    elseif change > 0 then
+      result.gained = result.gained + 1
+      keepTop(result.gains, limit, { key = key, now = now, change = change, new = was == 0 })
+    end
+  end
+  return result
+end
+
+local function pad(s, width) return s .. string.rep(" ", width - unicode.wlen(s)) end
+
+--- One list (drops or gains) as lines `width` wide: title, headings, then up
+--- to `rows` items. Narrow columns leave out the per-hour rate.
+local function column(list, title, empty, width, rows, hours)
+  local wide = width >= 60
+  local lines = { fit(title, width) }
+  if wide then
+    lines[2] = fit(string.format("%12s %10s %13s  %s", "Change", "Per hour", "Now", "Item"), width)
+  else
+    lines[2] = fit(string.format("%10s %10s  %s", "Change", "Now", "Item"), width)
+  end
+  for i = 1, math.min(#list, rows) do
+    local d = list[i]
     local name = names[d.key] or ("item " .. itemId(d.key) .. "@" .. itemData(d.key))
-    if d.now == 0 then name = name .. " (gone)" end
-    lines[#lines + 1] = fit(string.format("%12s %10s %13s  %s",
-      commas(d.change), commas(d.change / hours), commas(d.now), name), width)
+    if d.now == 0 then name = name .. " (gone)" elseif d.new then name = name .. " (new)" end
+    if wide then
+      lines[#lines + 1] = fit(string.format("%12s %10s %13s  %s",
+        signed(d.change), signed(d.change / hours), commas(d.now), name), width)
+    else
+      lines[#lines + 1] = fit(string.format("%10s %10s  %s", signed(d.change), commas(d.now), name), width)
+    end
   end
-  if #top == 0 then
-    lines[#lines + 1] = span > 0 and "Nothing has dropped." or "Waiting for the second snapshot."
-  end
+  if #list == 0 then lines[#lines + 1] = fit(empty, width) end
   return lines
+end
+
+local function summary(changes)
+  local span = (currentTime or base.time) - base.time
+  return string.format("Changes over %s: %d item types, %d dropped, %d gained",
+    span > 0 and duration(span) or "no time yet", #current.keys, changes.dropped, changes.gained), span
+end
+
+--- The two lists for `changes`, each `width` wide with at most `rows` items.
+local function columns(changes, width, rows)
+  local _, span = summary(changes)
+  local hours = math.max(span, config.interval) / 3600
+  local waiting = "Waiting for the second snapshot."
+  return column(changes.drops, "Biggest drops", span > 0 and "Nothing has dropped." or waiting, width, rows, hours),
+    column(changes.gains, "Biggest gains", span > 0 and "Nothing has gone up." or waiting, width, rows, hours)
 end
 
 local function screenSize()
@@ -457,25 +497,33 @@ local function screenSize()
   return 80, 25
 end
 
-local function writeReport(top, dropped)
+local function writeReport(changes)
   local f = io.open(reportFile, "w")
   if not f then return end
-  for _, line in ipairs(report(top, dropped, 200, config.reportFileLines)) do f:write(line, "\n") end
+  local drops, gains = columns(changes, 200, config.reportFileLines)
+  f:write((summary(changes)), "\n\n")
+  for _, line in ipairs(drops) do f:write(line, "\n") end
+  f:write("\n")
+  for _, line in ipairs(gains) do f:write(line, "\n") end
   f:close()
 end
 
-local function draw(top, dropped, status)
+local function draw(changes, status)
   local width, height = screenSize()
   term.clear()
-  -- Title, status, column headings, then the drops. The bottom row stays
-  -- empty: drawing on it came out garbled in game.
+  -- Summary, status, then drops on the left and gains on the right. The
+  -- bottom row stays empty: drawing on it came out garbled in game.
   -- A long status (an error) wraps onto up to three lines.
-  local statusLines, w = {}, width - 1
+  local w = width - 1
+  local lines = { fit((summary(changes)), w) }
   for i = 1, math.min(3, math.ceil(unicode.wlen(status) / w)) do
-    statusLines[i] = unicode.sub(status, (i - 1) * w + 1, i * w)
+    lines[#lines + 1] = unicode.sub(status, (i - 1) * w + 1, i * w)
   end
-  local lines = report(top, dropped, w, height - 3 - #statusLines)
-  for i, line in ipairs(statusLines) do table.insert(lines, 1 + i, line) end
+  local half = math.floor((w - 3) / 2)
+  local drops, gains = columns(changes, half, height - 3 - #lines)
+  for i = 1, math.max(#drops, #gains) do
+    lines[#lines + 1] = pad(drops[i] or "", half) .. " | " .. (gains[i] or "")
+  end
   for _, line in ipairs(lines) do term.write(line .. "\n") end
 end
 
@@ -493,7 +541,8 @@ for _, a in ipairs(args) do
 end
 
 local haveHistory = loadHistory()
-local status, top, dropped = "Starting.", {}, 0
+local status = "Starting."
+local changes = { drops = {}, gains = {}, dropped = 0, gained = 0 }
 
 local function step()
   local ok, err = pcall(function()
@@ -508,11 +557,12 @@ local function step()
       foldOld(t)
     end
     local _, height = screenSize()
-    top, dropped = biggestDrops(math.max(height - 4, config.reportFileLines))
+    changes = biggestChanges(math.max(height, config.reportFileLines))
     local shown = {}
-    for i, d in ipairs(top) do shown[i] = d.key end
+    for _, d in ipairs(changes.drops) do shown[#shown + 1] = d.key end
+    for _, d in ipairs(changes.gains) do shown[#shown + 1] = d.key end
     resolveNames(pipe, shown)
-    writeReport(top, dropped)
+    writeReport(changes)
     status = string.format("Updated %s (server time), next in %s. q quits.", os.date("%H:%M", t), duration(config.interval))
   end)
   if not ok then
@@ -526,7 +576,7 @@ end
 
 while true do
   step()
-  draw(top, dropped, status)
+  draw(changes, status)
   local wakeAt = computer.uptime() + config.interval
   repeat
     local ev, _, char = event.pull(math.max(0, wakeAt - computer.uptime()), "key_down")

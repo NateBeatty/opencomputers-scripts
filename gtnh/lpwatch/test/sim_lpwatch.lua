@@ -210,22 +210,34 @@ test("first snapshot waits for a second one", function()
   assert_has(report(w), "Waiting for the second snapshot")
 end)
 
-test("drops are ranked, gone items marked, rises ignored", function()
+test("drops and gains are ranked, gone and new items marked", function()
   local stocks = {
     { iron = 1000, copper = 50, gold = 10, tin = 500 },
-    { iron = 400, gold = 20, tin = 450 },
+    { iron = 400, gold = 20, tin = 450, odd = 300 },
   }
   local w = run(newWorld(), 2, function(n) return stocks[n] end)
   local r = report(w)
-  assert_has(r, "Biggest drops over 5m (3 item types, 3 dropped)")
+  assert_has(r, "Changes over 5m: 4 item types, 3 dropped, 2 gained")
+  local gainsAt = r:find("Biggest gains", 1, true)
+  assert(gainsAt, r)
   local iron = r:find("Iron", 1, true)
   local copper = r:find("Copper (gone)", 1, true)
   local tin = r:find("Tin", 1, true)
   assert(iron and copper and tin, r)
-  assert(iron < copper and copper < tin, "order: " .. r)
+  assert(iron < copper and copper < tin and tin < gainsAt, "drop order: " .. r)
   assert_has(r, "-600")
-  assert(not r:find("Gold", 1, true), "rise listed: " .. r)
-  assert_has(w.screen, "Iron")
+  -- Gains: the new item (+300) before gold (+10), both after the heading.
+  local odd = r:find("mod:odd@-1 (new)", 1, true)
+  local gold = r:find("Gold", 1, true)
+  assert(odd and gold and gainsAt < odd and odd < gold, "gain order: " .. r)
+  assert_has(r, "+300")
+  assert_has(r, "+10")
+  -- On screen the two lists sit side by side on the same rows.
+  local row
+  for line in w.screen:gmatch("[^\n]+") do
+    if line:find("Iron", 1, true) then row = line end
+  end
+  assert(row and row:find(" | ", 1, true) and row:find("mod:odd", 1, true), "screen row: " .. tostring(row))
 end)
 
 test("report covers only the last 24 hours", function()
@@ -233,7 +245,7 @@ test("report covers only the last 24 hours", function()
   local w = run(newWorld(), 300, function(n) return { iron = 10000 - 10 * n } end)
   local r = report(w)
   -- The window starts at the newest snapshot a full 24 h old: 288 steps back.
-  assert_has(r, "Biggest drops over 24h 00m")
+  assert_has(r, "Changes over 24h 00m")
   assert_has(r, "-2,880")
   assert_has(r, "-120")  -- per hour
 end)
@@ -246,7 +258,7 @@ test("history survives a restart", function()
   -- From the first snapshot (990) to the restarted program's first one (500):
   -- the first run took 10 snapshots and waited one interval after the last.
   assert_has(r, "-490")
-  assert_has(r, "Biggest drops over 50m")
+  assert_has(r, "Changes over 50m")
   assert(not r:find("Copper", 1, true), r)
 end)
 
@@ -254,7 +266,7 @@ test("ring wraps without growing the file count", function()
   local cfg = { window = 1200, interval = 300 }  -- 4 + 12 = 16 slots
   local w = run(newWorld(), 60, function(n) return { iron = 10000 - n } end, { config = cfg })
   local r = report(w)
-  assert_has(r, "Biggest drops over 20m")
+  assert_has(r, "Changes over 20m")
   assert_has(r, "-4 ")
   -- 16 slots, base.a, base.b, names, report.txt, /tmp/.lpwatch-clock
   assert(countFiles(w) <= 21, "files: " .. countFiles(w))
@@ -270,7 +282,7 @@ test("--reset starts the window again", function()
   run(w, 5, function(n) return { iron = 1000 - 100 * n } end)
   run(w, 2, function(n) return { iron = 400 - n } end, { argv = { "--reset" } })
   local r = report(w)
-  assert_has(r, "Biggest drops over 5m")
+  assert_has(r, "Changes over 5m")
   assert_has(r, "-1 ")
   -- The reset survives a restart too.
   run(w, 1, function() return { iron = 390 } end)
@@ -311,7 +323,7 @@ test("stock is read across several pages", function()
   end
   local w = run(newWorld(), 2, stock, { config = { pageSize = 3 } })
   local r = report(w)
-  assert_has(r, "(10 item types, 10 dropped)")
+  assert_has(r, "10 item types, 10 dropped, 0 gained")
   assert_has(r, "Bulk 10")
   assert(r:find("Bulk 10", 1, true) < r:find("Bulk 9", 1, true), "order: " .. r)
   -- 10 items in pages of 3: 4 calls per snapshot, the last one short.
